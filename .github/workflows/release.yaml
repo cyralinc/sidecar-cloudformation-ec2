@@ -1,0 +1,14 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '**'
+
+jobs:
+  release:
+    name: Release
+    permissions: write-all
+    secrets: inherit
+    uses: cyralinc/devops-github-workflows/.github/workflows/reusable-release.yaml@main

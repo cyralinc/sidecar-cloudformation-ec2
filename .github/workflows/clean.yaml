@@ -1,0 +1,25 @@
+name: Clean
+
+on:
+  # Allow manual dispatch
+  workflow_dispatch:
+  # Allow dispatch from the API
+  repository_dispatch:
+  pull_request:
+    types:
+      - labeled
+      - unlabeled
+      - opened
+      - closed
+      - reopened
+  push:
+    branches:
+      - main
+      - release/**
+
+jobs:
+  clean:
+    name: Clean
+    permissions: write-all
+    secrets: inherit
+    uses: cyralinc/devops-github-workflows/.github/workflows/reusable-clean.yaml@main

@@ -1,0 +1,25 @@
+version: 2
+
+registries:
+  gcr: # Define access for a private registry
+    type: docker-registry
+    url: gcr.io
+    username: _json_key
+    password: ${{secrets.GCR_CYRAL_DEV_JSON_TOKEN}}
+
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    registries:
+      - gcr
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
