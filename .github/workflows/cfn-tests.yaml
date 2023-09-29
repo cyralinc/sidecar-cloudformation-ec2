@@ -20,7 +20,7 @@ jobs:
       - name: Print the Cloud Formation Linter Version & run Linter.
         run: |
           cfn-lint --version
-          cfn-lint -I -t ./cft.yaml
+          cfn-lint -I -t ./cft.yml
 
       - name: Run security checks with cfn-nag
         uses: stelligent/cfn_nag@master
