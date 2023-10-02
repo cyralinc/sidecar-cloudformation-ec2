@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - 'cft_sidecar.yml'
-      - '.github/workflows/cfn-tests.yml'
+      - '.github/workflows/cfn-tests.yaml'
 
 jobs:
   cloudformation-linter:
