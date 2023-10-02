@@ -8,4 +8,4 @@ repos:
     rev: v0.80.2  # The version of cfn-lint to use
     hooks:
         - id: cfn-lint
-          files: .*\.(json|yml)$
+          files: .*\.(json|yaml|yml)$
