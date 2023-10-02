@@ -3,7 +3,7 @@ name: Test CloudFormation Templates
 on:
   push:
     paths:
-      - 'cft_sidecar.yml'
+      - 'cft_sidecar.yaml'
       - '.github/workflows/cfn-tests.yaml'
 
 jobs:
@@ -20,9 +20,9 @@ jobs:
       - name: Print the Cloud Formation Linter Version & run Linter.
         run: |
           cfn-lint --version
-          cfn-lint -I -t ./cft_sidecar.yml
+          cfn-lint -I -t ./cft_sidecar.yaml
 
       - name: Run security checks with cfn-nag
         uses: stelligent/cfn_nag@master
         with:
-          input_path: ./cft_sidecar.yml
+          input_path: ./cft_sidecar.yaml
