@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  MacrosTemplateVersionDash:
+    Description:
+      "Version of the Cyral Sidecar Macros CloudFormation template, with dashes
+      in the place of dots for the version, due to stack name constraints."
+    Type: String
+
+  PermissionsBoundary:
+     Type: String
+     Description: ARN of the permissions boundary to apply to all the IAM roles. Set to an empty string if no permission boundaries should be used.
+     Default: ""
+
+Conditions:
+  usePermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
+
+Resources:
+  ListMapMacro:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: !Sub 'CyralListMap-${MacrosTemplateVersionDash}'
+      Description: Maps all elements of a given list to a specified format
+      FunctionName: !GetAtt ListMapLambda.Arn
+
+  ListMapLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Maps all elements of a given list to a specified format
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 30
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: |
+          import copy
+          import json
+
+          # Will be populated by the handler. Have it as a global variable
+          # because it will be used in a recursive function.
+          load_balancer_sticky_ports = []
+
+          def printInvalidFormatError():
+            print('[ERROR] ListMap value must be of format "!Ref <ListParameterName>" or "[list, of, values]"')
+
+          def mapResource(resource, val):
+            if isinstance(resource, str):
+              ##################################################################
+              # Made it possible to use either %l or %ll to trigger replace;
+              # This is helpful if you need to differentiate between 2 resources
+              # that have the same name without the replacement, e.g:
+              # 'MyResource%l' and 'MyResource%ll', otherwise the last one will
+              # be lost when the template is turned to a python dictionary.
+
+              if '%l' in resource:
+                return resource.replace('%ll', '%l').replace('%l', str(val))
+              elif '%stickinessEnabled' in resource:
+                return resource.replace('%stickinessEnabled',
+                                        str(val in load_balancer_sticky_ports).lower())
+
+            if isinstance(resource, dict):
+              new_resource = copy.copy(resource)
+              for key in resource:
+                if '%l' in key:
+                  content = new_resource.pop(key)
+                  new_resource[mapResource(key, val)] = mapResource(content, val)
+                else:
+                  content = new_resource[key]
+                  new_resource[key] = mapResource(content, val)
+              return new_resource
+
+            if isinstance(resource, list):
+              return list(map(lambda elem: mapResource(elem, val), resource))
+
+            return resource
+
+          def processTemplate(template, parameters):
+            print(f'[INFO] template object received: {json.dumps(template, default=str)}')
+            print(f'[INFO] parameters object received: {json.dumps(parameters, default=str)}')
+
+            new_template = copy.deepcopy(template)
+
+            for name, resource in template['Resources'].items():
+              if 'ListMap' in resource:
+                map_list = new_template['Resources'][name].pop('ListMap')
+                # List may be raw or reference:
+                if isinstance(map_list, dict):
+                  try:
+                    list_ref = map_list['Ref']
+                  except AttributeError:
+                    printInvalidFormatError()
+                    return 'failed', template
+                  try:
+                    map_list = parameters[list_ref]
+                  except AttributeError:
+                    print(f'[ERROR] no Template Parameter named {list_ref} was found')
+                    return 'failed', template
+                elif not isinstance(map_list, list):
+                  printInvalidFormatError()
+                  return 'failed', template
+
+                resource_to_map = new_template['Resources'].pop(name)
+
+                print(f'[Mapping] Mapping resource: {json.dumps(resource_to_map, default=str)}')
+                print(f'[Mapping] Using list: {json.dumps(map_list, default=str)}')
+
+                for val in map_list:
+                  if val == '' or val == None:
+                    continue
+
+                  resource = copy.deepcopy(resource_to_map)
+                  new_resource = mapResource(resource, val)
+                  new_name = mapResource(name, val)
+
+                  new_template['Resources'][new_name] = new_resource
+
+            return 'success', new_template
+
+          def handler(event, context):
+            template = event['fragment']
+            parameters = event['templateParameterValues']
+
+            # Change this at global scope, since it is used by a recursive
+            # function.
+            global load_balancer_sticky_ports
+            load_balancer_sticky_ports = parameters['LoadBalancerStickyPorts']
+
+            status, new_template = processTemplate(template, parameters)
+
+            print(f'[INFO] processed template: {json.dumps(new_template, default=str)}')
+
+            resp = {
+              'requestId': event['requestId'],
+              'status': status,
+              'fragment': new_template
+            }
+
+            return resp
+
+  ExpandMacro:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: !Sub 'CyralExpand-${MacrosTemplateVersionDash}'
+      Description: Similar to list map, but expands list values within the same resource instead of creating multiple resources
+      FunctionName: !GetAtt ExpandLambda.Arn
+
+  ExpandLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Similar to list map, but expands list values within the same resource instead of creating multiple resources
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 30
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import copy
+
+          def printInvalidArg0FormatError():
+            print('[ERROR] Expand arg[0] must be of format "!Ref <ListParameterName>" or "[list, of, values]"')
+
+          def expandResource(resource, expanded_list):
+            if isinstance(resource, dict):
+              for key in resource:
+                content = resource[key]
+                resource[key] = expandResource(content, expanded_list)
+              return resource
+
+            if isinstance(resource, list):
+              new_resource = copy.deepcopy(resource)
+              if '%e' in resource:
+                new_resource.remove('%e')
+                new_resource += expanded_list
+              return new_resource
+
+            return resource
+
+          def replaceFormat(format, val):
+            if isinstance(format, str):
+              return format.replace('%v', str(val))
+
+            if isinstance(format, dict):
+              new_format = copy.deepcopy(format)
+              for key in format:
+                if '%v' in key:
+                  content = new_format.pop(key)
+                  new_key = replaceFormat(key, val)
+                  new_format[new_key] = replaceFormat(content, val)
+                else:
+                  new_format[key] = replaceFormat(new_format[key], val)
+              return new_format
+
+          def processTemplate(template, parameters):
+            print(f'[INFO] template object received: {json.dumps(template, default=str)}')
+            print(f'[INFO] parameters object received: {json.dumps(parameters, default=str)}')
+
+            new_template = copy.deepcopy(template)
+
+            for name, resource in template['Resources'].items():
+              if 'Expand' in resource:
+                expand_args = new_template['Resources'][name].pop('Expand')
+                expand_list = expand_args[0]
+                expand_format = expand_args[1]
+
+                # List may be raw or reference:
+                if isinstance(expand_list, dict):
+                  try:
+                    list_ref = expand_list['Ref']
+                  except AttributeError:
+                    printInvalidArg0FormatError()
+                    return 'failed', template
+                  try:
+                    expand_list = parameters[list_ref]
+                  except AttributeError:
+                    print(f'[ERROR] no Template Parameter named {list_ref} was found')
+                    return 'failed', template
+                elif not isinstance(expand_list, list):
+                  printInvalidArg0FormatError()
+                  return 'failed', template
+
+                expanded_list = list(map(lambda item: replaceFormat(expand_format, item), expand_list))
+
+                resource_to_expand = new_template['Resources'].pop(name)
+
+                print(f'[Expanding] Expanding resource: {json.dumps(resource_to_expand, default=str)}')
+                print(f'[Expanding] Using list: {json.dumps(expand_list, default=str)}')
+
+                new_resource = expandResource(resource_to_expand, expanded_list)
+
+                new_template['Resources'][name] = new_resource
+
+            return 'success', new_template
+
+          def handler(event, context):
+            template = event['fragment']
+            parameters = event['templateParameterValues']
+            status, new_template = processTemplate(template, parameters)
+
+            print(f'[INFO] processed template: {json.dumps(new_template, default=str)}')
+
+            resp = {
+              'requestId': event['requestId'],
+              'status': status,
+              'fragment': new_template
+            }
+
+            return resp
+
+  ListDiffMacro:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: !Sub 'CyralListDiff-${MacrosTemplateVersionDash}'
+      Description: Becomes the elements of the first list minus the elements of the second list
+      FunctionName: !GetAtt ListDiffLambda.Arn
+
+  ListDiffLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Becomes the elements of the first list minus the elements of the second list
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 30
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import copy
+
+          def printInvalidArgsFormatError():
+            print('[ERROR] DiffList arguments must be of format "!Ref <ListParameterName>" or "[list, of, values]"')
+
+          def dereferenceList(expand_list, parameters):
+            if isinstance(expand_list, dict):
+              try:
+                list_ref = expand_list['Ref']
+              except AttributeError:
+                printInvalidArgsFormatError()
+                return 'failed'
+              try:
+                expand_list = parameters[list_ref]
+              except AttributeError:
+                print(f'[ERROR] no Template Parameter named {list_ref} was found')
+                return 'failed'
+              return expand_list
+
+            # expand_list must be a list or Ref to a list;
+            elif not isinstance(expand_list, list):
+              printInvalidArgsFormatError()
+              return 'failed'
+
+            return expand_list
+
+          def diffResource(resource, diffed_list):
+            if isinstance(resource, str):
+              if resource == '%d':
+                return diffed_list
+
+            if isinstance(resource, dict):
+              for key in resource:
+                resource[key] = diffResource(resource[key], diffed_list)
+
+            return resource
+
+          def processTemplate(template, parameters):
+            print(f'[INFO] template object received: {json.dumps(template, default=str)}')
+            print(f'[INFO] parameters object received: {json.dumps(parameters, default=str)}')
+
+            new_template = copy.deepcopy(template)
+
+            for name, resource in template['Resources'].items():
+              if 'ListDiff' in resource:
+                diff_args = new_template['Resources'][name].pop('ListDiff')
+                diff_listA = dereferenceList(diff_args[0], parameters)
+                diff_listB = dereferenceList(diff_args[1], parameters)
+
+                resource_to_replace = new_template['Resources'].pop(name)
+
+                print(f'[Replacing] Replacing resource: {json.dumps(resource_to_replace, default=str)}')
+
+                diffed_list = list(filter(lambda item: item not in diff_listB, diff_listA))
+
+                new_resource = diffResource(resource_to_replace, diffed_list)
+
+                new_template['Resources'][name] = new_resource
+
+            return 'success', new_template
+
+          def handler(event, context):
+            template = event['fragment']
+            parameters = event['templateParameterValues']
+            status, new_template = processTemplate(template, parameters)
+
+            print(f'[INFO] processed template: {json.dumps(new_template, default=str)}')
+
+            resp = {
+              'requestId': event['requestId'],
+              'status': status,
+              'fragment': new_template
+            }
+
+            return resp
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'

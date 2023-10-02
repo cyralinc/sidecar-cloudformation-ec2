@@ -3,7 +3,7 @@ name: Test CloudFormation Templates
 on:
   push:
     paths:
-      - 'cft.yml'
+      - '*.yml'
       - '.github/workflows/cfn-tests.yml'
 
 jobs:
