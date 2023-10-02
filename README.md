@@ -6,4 +6,4 @@
 
 ## Summary
 
-Customers that are running sidecar versions <= `v4.9` can use the [Cloudformation YAML](./cft.yml) file located in this repository to upgrade their sidecar to at least `v4.10`.
+Customers that are running sidecar versions <= `v4.9` can use the [Cloudformation YAML](./cft_sidecar.yaml) file located in this repository to upgrade their sidecar to at least `v4.10`.
