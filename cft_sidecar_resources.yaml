@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  LoadBalancerArn:
+    Description: "The ARN for the sidecar LoadBalancer"
+    Type: String
+
+  LoadBalancerCertificateArn:
+    Type: String
+    Description: (Optional) ARN of SSL certificate that will be used for client connections to Snowflake.
+
+  NamePrefix:
+    Type: String
+    Description: Prefix for names of created resources in AWS
+    AllowedPattern: ".+"
+
+  SidecarPorts:
+    Description: "List of ports allowed to connect to the sidecar. See also 'LoadBalancerTLSPorts'."
+    Type: CommaDelimitedList
+
+  LoadBalancerTLSPorts:
+    Description: "List of ports that will have TLS terminated at load balancer level. See also 'SidecarPorts'."
+    Type: CommaDelimitedList
+
+  LoadBalancerStickyPorts:
+    Description:
+      "List of ports that will have session stickiness enabled.
+      This parameter must be a subset of 'SidecarPorts'."
+    Type: String
+
+  VPC:
+    Description: "VPC"
+    Type: AWS::EC2::VPC::Id
+    AllowedPattern: ".+"
+
+  CreateMacrosIsDone:
+    Description: "This is only used as a deployment flag"
+    Type: String
+    Default: ""
+
+  DeleteOldResourcesIsDone:
+    Description: "This is only used as a deployment flag"
+    Type: String
+    Default: ""
+
+  PermissionsBoundary:
+     Type: String
+     Description: ARN of the permissions boundary to apply to all the IAM roles. Set to an empty string if no permission boundaries should be used.
+     Default: ""
+
+  CustomTag:
+    Type: String
+    Description: (Optional) Custom tag to be added in the sidecar resources. Ex:"key=value".
+    Default: ""
+    AllowedPattern: "^([0-9a-zA-Z]+=[0-9a-zA-Z]+|)$"
+
+Transform:
+  # Unfortunately, CloudFormation requires that these be raw strings. So we
+  # cannot dynamically input the version with something like !Sub
+  # 'CyralListDiff-${Version}'.
+  - CyralListDiff-1-4
+  - CyralExpand-1-4
+  - CyralListMap-1-4
+
+Conditions:
+  usePermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
+  useCustomTag: !Not [!Equals [!Ref CustomTag, '']]
+
+Resources:
+  # Load Balancer Listeners using TCP
+  NLBListeners%l:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    ListMap: '%d'
+    ListDiff:
+      - !Ref SidecarPorts
+      - !Ref LoadBalancerTLSPorts
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref 'NLBTargetGroup%l'
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: '%l'
+      Protocol: TCP
+
+  # Load Balancer Listeners using TLS
+  NLBListeners%ll:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    ListMap: !Ref LoadBalancerTLSPorts
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref 'NLBTargetGroup%l'
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: '%l'
+      Protocol: TLS
+      Certificates:
+      - CertificateArn: !Ref LoadBalancerCertificateArn
+
+  NLBTargetGroup%l:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    ListMap: !Ref SidecarPorts
+    Properties:
+      Port: '%l'
+      HealthCheckPort: '9000'
+      HealthCheckPath: '/health'
+      HealthCheckProtocol: HTTP
+      Protocol: TCP
+      TargetType: instance
+      VpcId: !Ref VPC
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "0"
+        - Key: stickiness.enabled
+          Value: '%stickinessEnabled'
+        - Key: stickiness.type
+          Value: "source_ip"
+
+  GetTargetGroupRefsCustom0:
+    Type: AWS::CloudFormation::CustomResource
+    Expand:
+      - !Ref SidecarPorts
+      - 'Ref': 'NLBTargetGroup%v'
+    Properties:
+      ServiceToken: !GetAtt GetTargetGroupRefsLambda.Arn
+      TGArns:       ['%e']
+      Page:         0
+
+  GetTargetGroupRefsCustom1:
+    Type: AWS::CloudFormation::CustomResource
+    Expand:
+      - !Ref SidecarPorts
+      - 'Ref': 'NLBTargetGroup%v'
+    Properties:
+      ServiceToken: !GetAtt GetTargetGroupRefsLambda.Arn
+      TGArns:       ['%e']
+      Page:         1
+
+  GetTargetGroupRefsLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Creates comma delimited string of target group arns"
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 60
+      Role: !GetAtt GetTargetGroupRefsLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import cfnresponse
+          import logging
+          import json
+
+          def handler(event, context):
+            try:
+              if event['RequestType'] == 'Delete':
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                return
+
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              logger.info('Received event: {}'.format(json.dumps(event)))
+
+              page = int(event['ResourceProperties']['Page'])
+              page_start = page*25
+              page_end = page_start+25
+              tg_arns = event['ResourceProperties']['TGArns']
+
+              tg_arns_page = tg_arns[page_start:page_end]
+
+              response_data = {
+                'TargetGroupRefs': ','.join(tg_arns_page)
+              }
+              if page == 0 and len(tg_arns) > len(tg_arns_page):
+                response_data['TargetGroupRefs'] += ','
+
+              logger.info(f'response_data: {json.dumps(response_data)}')
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+            except Exception as e:
+              print(f'error: {e}')
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+      Tags:
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  GetTargetGroupRefsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+Outputs:
+  TargetGroupARNs:
+    Description: Arns of all target groups associated with this sidecar
+    Value:
+      !Join
+        - ""
+        - - !GetAtt GetTargetGroupRefsCustom0.TargetGroupRefs
+          - !GetAtt GetTargetGroupRefsCustom1.TargetGroupRefs

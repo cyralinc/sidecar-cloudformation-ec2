@@ -1,0 +1,1761 @@
+# Cyral Sidecar
+
+AWSTemplateFormatVersion: "2010-09-09"
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Sidecar basics'
+      Parameters:
+      - SidecarId
+      - ControlPlane
+      - ClientId
+      - ClientSecret
+    - Label:
+        default: 'Networking and Security Configuration'
+      Parameters:
+      - VpcId
+      - Subnets
+      - SidecarPorts
+      - AssociatePublicIpAddress
+      - LoadBalancerScheme
+      - LoadBalancerCertificateArn
+      - LoadBalancerStickyPorts
+      - LoadBalancerSubnets
+      - LoadBalancerTLSPorts
+      - SSHKeyName
+      - SSHInboundCIDR
+      - DBInboundCIDR
+      - MonitoringInboundCIDR
+      - DeploySecrets
+      - SecretsLocation
+      - SecretsKMSArn
+      - EC2EBSKMSArn
+      - ContainerRegistry
+      - ContainerRegistryUsername
+      - ContainerRegistryKey
+      - SidecarTLSCertificateSecretArn
+      - SidecarTLSCertificateRoleArn
+      - SidecarCACertificateSecretArn
+      - SidecarCACertificateRoleArn
+      - SidecarCustomHostRole
+      - IAMPolicies
+      - PermissionsBoundary
+    - Label:
+        default: 'SIEM Configuration'
+      Parameters:
+        - CloudwatchLogGroupName
+        - CloudwatchLogsRetention
+    - Label:
+        default: 'Snowflake Configuration'
+      Parameters:
+      - IdPSSOLoginURL
+      - IdPCertificate
+    - Label:
+        default: 'Advanced'
+      Parameters:
+      - SidecarVersion
+      - NamePrefix
+      - SidecarDNSName
+      - SidecarDNSHostedZoneId
+      - SidecarVolumeSize
+      - SidecarInstanceType
+      - EnableLocationBasedPolicyEval
+      - AmiId
+      - HealthCheckGracePeriod
+      - CustomUserDataPre
+      - CustomUserDataPreSidecarStart
+      - CustomUserDataPost
+      - MetadataHttpTokensOption
+      - TLSSkipVerify
+      - UseSingleContainer
+    - Label:
+        default: 'High Availability'
+      Parameters:
+      - AsgMin
+      - AsgMax
+      - AsgDesired
+      - EnableCrossZoneLoadBalancing
+
+Parameters:
+  SidecarPorts:
+    Description:
+      "List of ports allowed to connect to the sidecar through the load balancer and security group.
+      The maximum number of ports is limited to Network Load Balancers quotas (listeners and target 
+      groups). See also 'LoadBalancerTLSPorts'. Avoid port `9000` as it is reserved for instance
+      monitoring."
+    Type: String
+    Default: 443,453,1433,1521,3306,3307,5432,5439,9996,9999,27017,27018,27019,31010
+    AllowedPattern: ^(\d+\,)*(\d+)$
+
+  LoadBalancerTLSPorts:
+    Description:
+      "List of ports that will have TLS terminated at load balancer level
+      (snowflake or S3 browser support, for example). If assigned, 'LoadBalancerCertificateArn'
+      must also be provided. This parameter must be a subset of 'SidecarPorts'."
+    Type: String
+    Default: ""
+    AllowedPattern: ^((\d+\,)*(\d+))*$
+
+  LoadBalancerStickyPorts:
+    Description:
+      "List of ports that will have session stickiness enabled.
+      This parameter must be a subset of 'SidecarPorts'."
+    Type: String
+    Default: ""
+    AllowedPattern: ^((\d+\,)*(\d+))*$
+
+  VpcId:
+    Description: "AWS VPC ID to deploy sidecar to"
+    Type: AWS::EC2::VPC::Id
+    AllowedPattern: ".+"
+
+  LoadBalancerScheme :
+    Description: "EC2 network load balancer scheme ('internal' or 'internet-facing')"
+    Type: String
+    AllowedValues: ['internal', 'internet-facing']
+    Default: 'internal'
+    ConstraintDescription: must specify 'internal' or 'internet-facing'.
+
+  AssociatePublicIpAddress :
+    Description: "Associates a public IP to sidecar EC2 instances"
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+    ConstraintDescription: must specify 'true' or 'false'.
+
+  SidecarDNSName:
+    Description: "(Optional) Fully qualified domain name that will be automatically created/updated to reference the sidecar LB"
+    Type: String
+    Default: ""
+
+  SidecarDNSHostedZoneId:
+    Description: "(Optional) Route53 hosted zone ID for the corresponding SidecarDNSName provided"
+    Type: String
+    Default: ""
+
+  DeploySecrets:
+    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `ClientId`, `ClientSecret` and `ContainerRegistryKey`"
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+    ConstraintDescription: must specify 'true' or 'false'.
+
+  SecretsLocation:
+    Description: "(Optional) Location in AWS Secrets Manager to store `ClientId`, `ClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
+    Type: String
+    Default: ""
+
+  SecretsKMSArn:
+    Description: "(Optional) ARN of the KMS key used to encrypt/decrypt secrets. If unset, secrets will use the default KMS key."
+    Type: String
+    Default: ""
+
+  EC2EBSKMSArn:
+    Description: "(Optional) ARN of the KMS key used to encrypt/decrypt EBS volumes. If unset, EBS will use the default KMS key. Make sure the KMS key allows the principal `arn:aws:iam::ACCOUNT_NUMBER:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling`, otherwise the ASG will not be able to launch the new instances."
+    Type: String
+    Default: ""
+
+  ClientId:
+    NoEcho: true
+    Description: "Sidecar client ID"
+    Type: String
+    AllowedPattern: ".+"
+
+  ClientSecret:
+    NoEcho: true
+    Description: "Sidecar client secret"
+    Type: String
+    AllowedPattern: ".+"
+
+  SidecarTLSCertificateSecretArn:
+    Description: "(Optional) ARN of secret in AWS Secrets Manager that contains a certificate to terminate TLS connections."
+    Type: String
+    Default: ""
+    AllowedPattern: "^(|arn:.+)$"
+  SidecarTLSCertificateRoleArn:
+    Description: "(Optional) ARN of an AWS IAM Role to assume when reading the TLS certificate."
+    Type: String
+    Default: ""
+    AllowedPattern: "^(|arn:.+)$"
+  SidecarCACertificateSecretArn:
+    Description: "(Optional) ARN of secret in AWS Secrets Manager that contains a CA certificate to sign sidecar-generated certs."
+    Type: String
+    Default: ""
+    AllowedPattern: "^(|arn:.+)$"
+  SidecarCACertificateRoleArn:
+    Description: "(Optional) ARN of an AWS IAM Role to assume when reading the CA certificate."
+    Type: String
+    Default: ""
+    AllowedPattern: "^(|arn:.+)$"
+
+  SidecarCustomHostRole:
+    Description: "(Optional) Name of an AWS IAM Role to attach to the EC2 instance profile."
+    Type: String
+    Default: ""
+
+  LoadBalancerCertificateArn:
+    Type: String
+    Description: (Optional) ARN of SSL certificate that will be used for client connections to Snowflake or S3 Browser.
+    Default: ""
+
+  IdPSSOLoginURL:
+    Description: "(Optional) The IdP SSO URL for the IdP being used with Snowflake. Required if using SSO with Snowflake."
+    Type: String
+    Default: ""
+
+  IdPCertificate:
+    Description: "(Optional) The certificate used to verify SAML assertions from the IdP being used with Snowflake. Enter this value as a one-line string with literal \n characters specifying the line breaks. Required if using SSO with Snowflake."
+    Type: String
+    Default: ""
+
+  SidecarPublicIdPCertificate:
+    Description: "(Optional) The public certificate used to verify signatures for SAML Assertions generated by the sidecar. Required if using SSO with Snowflake."
+    Type: String
+    Default: ""
+
+  SidecarPrivateIdPKey:
+    Description: "(Optional) The private key used to sign SAML Assertions generated by the sidecar. Required if using SSO with Snowflake."
+    Type: String
+    Default: ""
+    NoEcho: true
+
+  LoadBalancerSubnets:
+    Description: "Subnets to add load balancer to. If not provided, the load balancer will assume the subnets specified in the `Subnets` parameter."
+    Type: CommaDelimitedList
+    Default: ""
+
+  SSHKeyName:
+    Type: String
+    Description: "Name of an existing EC2 KeyPair to enable SSH access to the EC2 instances."
+    Default: ""
+
+  SSHInboundCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: "CIDR block parameter must be in the form x.x.x.x/x"
+    Description: "Allowed CIDR block for SSH access to the sidecar."
+    Type: String
+    Default: "0.0.0.0/0"
+  DBInboundCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: "CIDR block parameter must be in the form x.x.x.x/x"
+    Description: "Allowed CIDR block for database access to the sidecar."
+    Type: String
+    Default: "0.0.0.0/0"
+  MonitoringInboundCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: "CIDR block parameter must be in the form x.x.x.x/x"
+    Description: "Allowed CIDR block for health check and metrics requests to the sidecar. If restricting the access, consider setting to the VPC CIDR or an equivalent to cover the assigned subnets as the load balancer performs health checks on the EC2 instances."
+    Type: String
+    Default: "0.0.0.0/0"
+  SidecarVolumeSize:
+    Description: "Sidecar EC2 volume size (min 15GB)"
+    Type: "String"
+    Default: "15"
+    AllowedPattern: "[0-9]+"
+  SidecarInstanceType:
+    AllowedValues:
+      [t3.small, t3.medium, t3.large, t3.xlarge, m5.large, m5.xlarge, m5n.large, m5n.xlarge, c5.large, c5.xlarge, r5.large, r5.xlarge]
+    Default: t3.medium
+    Description: "Amazon EC2 instance type for the sidecar instances"
+    Type: String
+
+  EnableLocationBasedPolicyEval:
+    Type: String
+    Description: "Enable/Disable location-based policy evaluation"
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  Subnets:
+    Description: "Subnets to add sidecar to"
+    Type: "List<AWS::EC2::Subnet::Id>"
+
+  SidecarId:
+    Type: String
+    Description: "Sidecar identifier"
+    AllowedPattern: ".+"
+
+  SidecarVersion:
+    Type: String
+    Description: "(Optional) The version of the sidecar. If unset, the version will be dynamically retrieved from the Control Plane."
+    Default: ""
+
+  NamePrefix:
+    Type: String
+    Description: "Prefix for names of the AWS resources created. Maximum length is 24 characters."
+    Default: ""
+
+  ControlPlane:
+    Type: String
+    Description: Control plane URL - <tenant>.app.cyral.com
+    AllowedPattern: ".+"
+
+  AmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Description: "Amazon Linux 2 AMI ID for sidecar EC2 instances. The default behavior is to use the latest version.
+      In order to define a new image, replace 'recommended' by the desired image name (eg 'amzn2-ami-ecs-hvm-2.0.20181112-x86_64-ebs')."
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  CloudwatchLogsRetention:
+    Type: String
+    Description: Cloudwatch logs retention in days
+    ConstraintDescription: 'Valid values are: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]'
+    Default: "14"
+    AllowedPattern: "^(1|3|5|7|14|30|60|90|120|150|180|365|400|545|731|1827|3653)$"
+
+  CloudwatchLogGroupName:
+    Type: String
+    Description: Cloudwatch log group name. In order to use this log group, set the logging integration in the control plane.
+    Default: ""
+
+  IAMPolicies:
+    Type: CommaDelimitedList
+    Description: (Optional) List of IAM policies ARNs that will be attached to the sidecar IAM role (Comma Delimited List)
+    Default: ""
+
+  PermissionsBoundary:
+     Type: String
+     Description: ARN of the permissions boundary to apply to all the IAM roles. Set to an empty string if no permission boundaries should be used.
+     Default: ""
+
+  ContainerRegistry:
+    Description: "Address of the container registry where Cyral images are stored."
+    Type: String
+    AllowedPattern: ".+"
+    Default: "public.ecr.aws/cyral"
+
+  ContainerRegistryUsername:
+    Description: "Username to authenticate to the container registry."
+    Type: String
+    Default: ""
+
+  ContainerRegistryKey:
+    NoEcho: true
+    Description: "Corresponding key for the user name provided to authenticate to the container registry."
+    Type: String
+    Default: ""
+
+  HealthCheckGracePeriod:
+    Type: String
+    Description: "Determines how long (in seconds) the ASG will wait before checking the health status of the EC2 instance."
+    Default: "600"
+    AllowedPattern: "[0-9]+"
+
+  RecycleHealthCheckIntervalSec:
+    Type: String
+    Description: "(Optional) The interval (in seconds) in which the sidecar instance checks whether it has been marked or recycling."
+    Default: "30"
+    AllowedPattern: "[0-9]+"
+
+  AsgMin:
+    Description: "The minimum number of hosts to create in the auto autoscaling group"
+    Type: "String"
+    Default: "1"
+    AllowedPattern: "[0-9]+"
+
+  AsgDesired:
+    Description: "The desired number of hosts to create in the auto scaling group"
+    Type: "String"
+    Default: "1"
+    AllowedPattern: "[0-9]+"
+
+  AsgMax:
+    Description: "The maximum number of hosts to create in the auto scaling group"
+    Type: "String"
+    Default: "2"
+    AllowedPattern: "[0-9]+"
+
+  EnableCrossZoneLoadBalancing:
+    Description: "Enable cross zone load balancing"
+    Type: "String"
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CustomTag:
+    Type: String
+    Description: (Optional) Custom tag to be added in the sidecar resources. Ex:"key=value".
+    Default: ""
+    AllowedPattern: "^([0-9a-zA-Z]+=[0-9a-zA-Z]+|)$"
+
+  CustomUserDataPre:
+    Type: String
+    Description: (Optional) Ancillary consumer supplied user-data script. Provide Bash script commands to be executed before the sidecar installation. Ex:"echo 'TEST'".
+    Default: ""
+
+  CustomUserDataPreSidecarStart:
+    Type: String
+    Description: (Optional) Ancillary consumer supplied user-data script. Provide Bash script commands to be executed before the sidecar starts. Ex:"echo 'TEST'"
+    Default: ""
+
+  CustomUserDataPost:
+    Type: String
+    Description: (Optional) Ancillary consumer supplied user-data script. Provide Bash script commands to be executed after the sidecar starts. Ex:"echo 'TEST'"
+    Default: ""
+
+  MetadataHttpTokensOption:
+    Type: String
+    Description: Instance Metadata Service token requirement
+    Default: "required"
+    AllowedValues:
+      - "required"
+      - "optional"
+
+  TLSSkipVerify:
+    Description: "Skip TLS verification for HTTPS communication with the control plane and during sidecar initialization"
+    Type: "String"
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  UseSingleContainer:
+    Description: "Use single container for sidecar deployment"
+    Type: "String"
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+
+Mappings:
+  Constants:
+    MacrosTemplate:
+      # When changing the macros template version here, please make sure to also
+      # change it accordingly inside the resources template. The values are
+      # hardcoded there due to CloudFormation limitations (not possible to pass
+      # Macros version as a parameter to that stack).
+      Version: 1.4
+    ResourcesTemplate:
+      Version: 1.8
+
+Conditions:
+  mustDeploySecrets: !Equals [!Ref DeploySecrets, true]
+  mustCreateDNSRecordSet: !And [!Not [!Equals [!Ref SidecarDNSHostedZoneId, '']], !Not [!Equals [!Ref SidecarDNSName, '']]]
+  sidecarDNSNameNotEmpty: !Not [!Equals [!Ref SidecarDNSName, '']]
+
+  sidecarTLSCertificateSecretArnEmpty: !Equals [!Ref SidecarTLSCertificateSecretArn, '']
+  sidecarTLSCertificateSecretArnNotEmpty: !Not [!Condition sidecarTLSCertificateSecretArnEmpty]
+  sidecarTLSCertificateRoleArnEmpty: !Equals [!Ref SidecarTLSCertificateRoleArn, '']
+  sidecarTLSCertificateRoleArnNotEmpty: !Not [!Condition sidecarTLSCertificateRoleArnEmpty]
+  sidecarTLSCertificateDoNotAssumeRole: !And
+    - !Condition sidecarTLSCertificateSecretArnNotEmpty
+    - !Condition sidecarTLSCertificateRoleArnEmpty
+  sidecarTLSCertificateMustAssumeRole: !And
+    - !Condition sidecarTLSCertificateSecretArnNotEmpty
+    - !Condition sidecarTLSCertificateRoleArnNotEmpty
+
+  sidecarCACertificateSecretArnEmpty: !Equals [!Ref SidecarCACertificateSecretArn, '']
+  sidecarCACertificateSecretArnNotEmpty: !Not [!Condition sidecarCACertificateSecretArnEmpty]
+  sidecarCACertificateRoleArnEmpty: !Equals [!Ref SidecarCACertificateRoleArn, '']
+  sidecarCACertificateRoleArnNotEmpty: !Not [!Condition sidecarCACertificateRoleArnEmpty]
+  sidecarCACertificateDoNotAssumeRole: !And
+    - !Condition sidecarCACertificateSecretArnNotEmpty
+    - !Condition sidecarCACertificateRoleArnEmpty
+  sidecarCACertificateMustAssumeRole: !And
+    - !Condition sidecarCACertificateSecretArnNotEmpty
+    - !Condition sidecarCACertificateRoleArnNotEmpty
+
+  sidecarCustomHostRoleEmpty: !Equals [!Ref SidecarCustomHostRole, '']
+  loadBalancerSubnetsEmpty: !Equals [!Join [",", !Ref LoadBalancerSubnets] , '']
+  mustAttachIAMPolicies: !Not [!Equals [!Join ["", !Ref IAMPolicies], ""]]
+  useKMSSecrets: !Not [!Equals [!Ref SecretsKMSArn, '']]
+  useKMSEBS: !Not [!Equals [!Ref EC2EBSKMSArn, '']]
+  useKMSSecretsOrEBS: !Or [!Condition useKMSSecrets, !Condition useKMSEBS]
+  useKMS: !Or [!Condition useKMSSecrets, !Condition useKMSEBS]
+  usePermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
+  useCustomTag: !Not [!Equals [!Ref CustomTag, '']]
+  shouldSkipTls: !Equals [!Ref TLSSkipVerify, true]
+  hasCloudwatchLogGroupName: !Not [!Equals [!Ref CloudwatchLogGroupName, '']]
+  hasSSHKeyName: !Not [!Equals [!Ref SSHKeyName, '']]
+  hasSecretsLocation: !Not [!Equals [!Ref SecretsLocation, '']]
+
+Resources:
+  GetNamePrefixLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Creates the default NamePrefix in case not provided by the user"
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 30
+      Role: !GetAtt LambdaIngressListRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import cfnresponse
+
+          def handler(event, context):
+            try:
+              response_data = {}
+              currentNamePrefix = event['ResourceProperties']['CurrentNamePrefix']
+              sidecarId = str(event['ResourceProperties']['SidecarId'])  # Convert to string
+              if currentNamePrefix:
+                response_data['NamePrefix'] = currentNamePrefix
+              else:
+                response_data['NamePrefix'] = 'cyral-' + sidecarId[-6:].lower()
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+            except Exception as e:
+              print(f'error: {e}')
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  GetNamePrefixCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:      !GetAtt GetNamePrefixLambda.Arn
+      CurrentNamePrefix: !Ref NamePrefix
+      SidecarId:         !Ref SidecarId
+
+  CloudwatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !If [hasCloudwatchLogGroupName, !Ref CloudwatchLogGroupName, !GetAtt GetNamePrefixCustomResource.NamePrefix]
+      RetentionInDays: !Ref CloudwatchLogsRetention
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  AutoScalingGroupSidecar:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 0
+        MaxBatchSize: 1
+        PauseTime: "PT5M"
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref SidecarLaunchTemplate
+        Version: !GetAtt SidecarLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier: !Ref Subnets
+      MinSize: !Ref AsgMin
+      MaxSize: !Ref AsgMax
+      Cooldown: "0"
+      DesiredCapacity: !Ref AsgDesired
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: !Ref HealthCheckGracePeriod
+      TargetGroupARNs:
+        Fn::Split:
+          - ","
+          - Fn::GetAtt:
+            - ResourcesStack
+            - Outputs.TargetGroupARNs
+      MetricsCollection:
+        - Granularity: "1Minute"
+          Metrics:
+            - "GroupInServiceInstances"
+            - "GroupPendingInstances"
+            - "GroupTerminatingInstances"
+            - "GroupTotalInstances"
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!GetAtt GetNamePrefixCustomResource.NamePrefix, "sidecar"]]
+          PropagateAtLaunch: true
+        - Key: "SidecarVersion"
+          Value: !Ref SidecarVersion
+          PropagateAtLaunch: true
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+          PropagateAtLaunch: true
+        - Key: "MetricsPort"
+          Value: "9000"
+          PropagateAtLaunch: true
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+            PropagateAtLaunch: true
+          - !Ref AWS::NoValue
+    CreationPolicy:
+      ResourceSignal:
+        Count: 0
+        Timeout: PT5M
+
+  SidecarHostProfile:
+    DependsOn: SidecarHostPolicy
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Roles:
+        - !If [sidecarCustomHostRoleEmpty, !Ref SidecarHostRole, !Ref SidecarCustomHostRole]
+      Path: /
+
+  SidecarHostRole:
+    Condition: sidecarCustomHostRoleEmpty
+    Type: "AWS::IAM::Role"
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns: !If [mustAttachIAMPolicies, !Ref IAMPolicies, !Ref AWS::NoValue]
+
+  SidecarHostPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: SidecarPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - "ec2:DescribeTags"
+              - "autoscaling:CompleteLifecycleAction"
+              - "autoscaling:SetInstanceHealth"
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource: !GetAtt CloudwatchLogGroup.Arn
+            Effect: Allow
+          - Action:
+              - "secretsmanager:GetSecretValue"
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/cyral/*'
+              - !Sub
+                - 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${secrets_location}*'
+                - secrets_location: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
+              - !If [sidecarTLSCertificateDoNotAssumeRole, !Ref SidecarTLSCertificateSecretArn, !Ref AWS::NoValue]
+              - !If [sidecarCACertificateDoNotAssumeRole, !Ref SidecarCACertificateSecretArn, !Ref AWS::NoValue]
+            Effect: Allow
+          - Action:
+              - "ecr:GetAuthorizationToken"
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - "ecr:BatchGetImage"
+              - "ecr:GetDownloadUrlForLayer"
+            Resource: !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+            Effect: Allow
+          - Fn::If:
+            - sidecarTLSCertificateMustAssumeRole
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+              Resource: !Ref SidecarTLSCertificateRoleArn
+            - !Ref AWS::NoValue
+          - Fn::If:
+            - sidecarCACertificateMustAssumeRole
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+              Resource: !Ref SidecarCACertificateRoleArn
+            - !Ref AWS::NoValue
+      Roles:
+        - !If [sidecarCustomHostRoleEmpty, !Ref SidecarHostRole, !Ref SidecarCustomHostRole]
+
+  SidecarKMSPolicy:
+    Type: "AWS::IAM::Policy"
+    Condition: useKMS
+    Properties:
+      PolicyName: SidecarKMSPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Fn::If:
+              - useKMSSecretsOrEBS
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource:
+                  - !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
+                  - !If [useKMSEBS, !Ref EC2EBSKMSArn, !Ref AWS::NoValue]
+              - !Ref AWS::NoValue
+      Roles:
+        - !If [sidecarCustomHostRoleEmpty, !Ref SidecarHostRole, !Ref SidecarCustomHostRole]
+
+  SidecarLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-LT'
+      LaunchTemplateData:
+        KeyName: !If [hasSSHKeyName, !Ref SSHKeyName, !Ref AWS::NoValue]
+        IamInstanceProfile:
+          Name: !Ref SidecarHostProfile
+        ImageId: !Ref AmiId
+        InstanceType: !Ref SidecarInstanceType
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref SidecarVolumeSize
+              VolumeType: gp2
+              DeleteOnTermination: true
+              KmsKeyId: !If [useKMSEBS, !Ref EC2EBSKMSArn, !Ref AWS::NoValue]
+              Encrypted: true
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: !Ref AssociatePublicIpAddress
+            Groups:
+              - !Ref SidecarSecurityGroup
+        MetadataOptions:
+          # This is needed because clients of AWS services run within
+          # containers on EC2 instance. See https://github.com/aws/aws-sdk-go/issues/2972
+          # for a detailed explanation.
+          HttpPutResponseHopLimit: 1
+          HttpTokens: !Ref MetadataHttpTokensOption
+        UserData:
+          Fn::Base64: !Sub
+          - |
+            #!/bin/bash -e
+            
+            ${functions}
+            ${CustomUserDataPre}
+            ${pre}
+            ${CustomUserDataPreSidecarStart}
+            ${post}
+            ${CustomUserDataPost}
+
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroupSidecar --region ${AWS::Region}
+          - functions:
+              !Sub
+              - |            
+                # Defining functions
+                function package_install(){
+                    echo "Updating and installing packages..."
+                    yum update -y
+                    yum install -y aws-cfn-bootstrap wget ec2-instance-connect docker jq
+                }
+
+                function docker_compose_install(){
+                    # Compose Setup
+                    sudo mkdir -p /usr/local/lib/docker/cli-plugins/
+                    sudo ${curl} -SsfL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+                    sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+                }
+
+                function docker_setup(){
+                    echo "Configuring Docker..."
+                    sudo usermod -a -G docker ec2-user    
+                    # Configure fd limit for ec2 instance and containers
+                    sudo bash -c 'cat > /etc/security/limits.d/fdlimit.conf' << EOF
+                *       soft  nofile  65535
+                *       hard  nofile  65535
+                EOF
+                    sudo bash -c 'cat > /etc/sysconfig/docker' << EOF
+                DAEMON_MAXFILES=65535
+                OPTIONS="--default-ulimit nofile=65535:65535"
+                DAEMON_PIDFILE_TIMEOUT=10
+                EOF
+                    sudo systemctl enable docker
+                    sudo systemctl restart docker
+                }
+
+                function retry() {
+                  RETRIES=15
+                  while [ $RETRIES -gt 0 ]; do
+                    set +e
+                    $@
+                    RESULT=$?
+                    set -e
+                    if [ $RESULT -eq 0 ]; then
+                      echo "Success"
+                      return 0
+                    fi
+                    echo "Failed"
+                    sleep 5
+                    let RETRIES-=1
+                  done
+                  echo "Retries exceeded"
+                  exit 3
+                }
+
+                function extract_key_from_json_input() {
+                  # Both key and tls.key are valid JSON keys for private keys.
+                  # Values can be PEM strings or base64-encoded PEM strings.
+                  jq -r '
+                    (if has("key") then .key else ."tls.key" end) as $key |
+                    if ($key | startswith("-----BEGIN")) then $key else ($key | gsub("\\s+"; "") | @base64d) end
+                  '
+                }
+
+                function extract_cert_from_json_input() {
+                  # Both cert and tls.crt are valid JSON keys for certificates.
+                  # Values can be PEM strings or base64-encoded PEM strings.
+                  jq -r '
+                    (if has("cert") then .cert else ."tls.crt" end) as $cert |
+                    if ($cert | startswith("-----BEGIN")) then $cert else ($cert | gsub("\\s+"; "") | @base64d) end
+                  '
+                }
+
+                function get_secret_value() {
+                  secret_arn="$1"
+                  role_arn="$2"
+                  [ -z "$secret_arn" ] && return
+                  (
+                    if [ -n "$role_arn" ]; then
+                      assume_role_result="$(aws sts assume-role --role-arn $role_arn --role-session-name cyral-sidecar)"
+                      export AWS_ACCESS_KEY_ID=$(echo "$assume_role_result" | jq -r .Credentials.AccessKeyId)
+                      export AWS_SECRET_ACCESS_KEY=$(echo "$assume_role_result" | jq -r .Credentials.SecretAccessKey)
+                      export AWS_SESSION_TOKEN=$(echo "$assume_role_result" | jq -r .Credentials.SessionToken)
+                    fi
+                    aws --region ${AWS::Region} secretsmanager get-secret-value --secret-id $secret_arn --query SecretString --output text
+                  )
+                }
+
+                function get_secret(){
+                    echo "Fetching Secret..."
+                    if ! secret=$(aws secretsmanager get-secret-value --secret-id "${secrets_location}" --query SecretString --output text --region "${AWS::Region}" 2>&1); then
+                        echo "Unable to fetch secret ${secrets_location}"
+                        echo "Error: $secret"
+                        exit 1
+                    fi
+                    SIDECAR_CLIENT_ID=$(echo "$secret" | jq -r .clientId)
+                    SIDECAR_CLIENT_SECRET=$(echo "$secret" | jq -r .clientSecret)
+                }
+
+                function load_certs() {
+                    echo "Loading certificates..."
+                    local sidecar_tls_cert_secret_value sidecar_ca_cert_secret_value
+                    sidecar_tls_cert_secret_value=$(
+                        get_secret_value "${sidecar_tls_certificate_secret_arn}" "${SidecarTLSCertificateRoleArn}"
+                    )
+                    sidecar_ca_cert_secret_value=$(
+                        get_secret_value "${sidecar_ca_certificate_secret_arn}" "${SidecarCACertificateRoleArn}"
+                    )
+                    SIDECAR_TLS_KEY=$(echo "$sidecar_tls_cert_secret_value" | extract_key_from_json_input | base64 -w 0)
+                    SIDECAR_TLS_CERT=$(echo "$sidecar_tls_cert_secret_value" | extract_cert_from_json_input | base64 -w 0)
+                    SIDECAR_CA_KEY=$(echo "$sidecar_ca_cert_secret_value" | extract_key_from_json_input | base64 -w 0)
+                    SIDECAR_CA_CERT=$(echo "$sidecar_ca_cert_secret_value" | extract_cert_from_json_input | base64 -w 0)
+                }
+
+                function load_idp_certs() {
+                    echo "Loading IDP certificates..."
+                    SIDECAR_IDP_PUBLIC_CERT="$(echo "$secret" | jq -r .sidecarPublicIdpCertificate)"
+                    SIDECAR_IDP_PRIVATE_KEY="$(echo "$secret" | jq -r .sidecarPrivateIdpKey)"
+                }
+
+                function fetch_hostname() {
+                    echo "Fetching public hostname..."
+                    INSTANCE_ID=$(${curl} -sf -H "X-aws-ec2-metadata-token: $( \
+                        ${curl} -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" \
+                        )" http://169.254.169.254/latest/meta-data/instance-id || echo "$HOSTNAME")
+                    echo "Setting INSTANCE_ID to '$INSTANCE_ID'"
+                }
+
+                function update_nginx_resolver(){
+                    export NGINX_RESOLVER=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}')
+                    echo "Setting NGINX_RESOLVER to '$NGINX_RESOLVER'..."
+                }
+
+                function get_token () {
+                    echo "Getting Control Plane Token using port $1..."
+                    local url_token="https://${ControlPlane}:$1/v1/users/oidc/token"
+                    token=$(${curl} --no-progress-meter --fail-with-body --request POST "$url_token" -d grant_type=client_credentials -d client_id="$SIDECAR_CLIENT_ID" -d client_secret="$SIDECAR_CLIENT_SECRET" 2>&1)
+                    token_error=$(echo $?)
+                }
+                
+                function get_sidecar_version () {
+                    echo "Getting sidecar version from Control Plane..."
+                    get_token "443"
+                    if [[ $token_error -ne 0 ]]; then
+                        error_443="$token"
+                        get_token "8000"
+                        if [[ $token_error -ne 0 ]]; then
+                            echo "Unable to retrieve token!!"
+                            echo "Attempt on 443: $error_443"
+                            echo "Attempt on 8000: $token"        
+                            return 1
+                        fi
+                    fi
+                    local access_token=$(echo "$token" | jq -r .access_token)
+                    local resp=$(${curl} --no-progress-meter --fail-with-body --request GET "https://${ControlPlane}/v2/sidecars/${SidecarId}" -H "Authorization: Bearer $access_token")
+                    if [[ $? -ne 0 ]]; then
+                      echo "Error retrieving sidecar version from Control Plane."
+                      return 1
+                    fi
+                    SIDECAR_VERSION=$(echo "$resp" | jq -r '.sidecar.version // empty')
+                }
+
+                function download_sidecar () {
+                    local access_token url
+                    echo "Downloading Sidecar Compose File..."
+                    get_token "443"
+                    if [[ $token_error -ne 0 ]]; then
+                        error_443="$token"
+                        get_token "8000"
+                        if [[ $token_error -ne 0 ]]; then
+                            echo "Unable to retrieve token!!"
+                            echo "Attempt on 443: $error_443"
+                            echo "Attempt on 8000: $token"        
+                            return 1
+                        fi
+                    fi
+                    access_token=$(echo "$token" | jq -r .access_token)
+                    url="https://${ControlPlane}/deploy/docker-compose?TemplateVersion=$SIDECAR_VERSION"
+                    echo "Trying to download the sidecar template from: $url"
+                    if ! ${curl} -fsS --no-progress-meter -o /home/ec2-user/sidecar.compose.yaml -L "$url" -H "Authorization: Bearer $access_token" ; then
+                        echo "Unable to download compose file for version $SIDECAR_VERSION, please make sure all parameters are correct"
+                        return 1
+                    fi
+                    return 0
+                }
+
+                function registry_login () {
+                    echo "Container Registry Login..."
+                    local key=$(echo "$secret" | jq -r 'select(.containerRegistryKey != null) | .containerRegistryKey' | base64 --decode)
+                    if [[ ${ContainerRegistry} == *"aws"* ]]; then
+                        echo "(login): Logging in to AWS ECR..."
+                        eval $(aws ecr --no-include-email get-login --region ${AWS::Region})
+                    elif [ -n "$key" ]; then
+                        echo "(login): Logging in to GCR..."
+                        echo "$key" | docker login -u ${ContainerRegistryUsername} --password-stdin https://gcr.io
+                    else
+                        echo "(login): Won't log in automatically to any image registry. Image registry set to: ${ContainerRegistry}"
+                    fi
+                }
+
+                # Checks if the specified Docker container is running without restarts within 5 seconds
+                function containerCheck () {
+                  CONTAINER_NAME="$1"
+                  WAIT_TIME=0
+                  EXPECTED_WAIT_TIME=5
+                  until [ $WAIT_TIME -eq $EXPECTED_WAIT_TIME ] || [ "$(eval docker inspect "$CONTAINER_NAME" | jq -r -e '.[].RestartCount')" -ne 0 ]; do
+                      printf "."
+                      (( WAIT_TIME++ ))
+                      sleep 1
+                  done
+                  echo ""
+                  [ "$WAIT_TIME" -eq $EXPECTED_WAIT_TIME ]
+                }
+
+                function launch () {
+                    echo "Starting sidecar..."
+                    cd /home/ec2-user
+                    if [[ ${UseSingleContainer} == "true" ]]; then
+                      SINGLE_CONTAINER_IMAGE=${ContainerRegistry}/cyral-sidecar:$SIDECAR_VERSION
+                      retry docker pull -q $SINGLE_CONTAINER_IMAGE
+                      retry docker run -d --name sidecar --network=host --log-driver=local --log-opt max-size=500m --restart=unless-stopped --env-file .env $SINGLE_CONTAINER_IMAGE
+                      if ! containerCheck "sidecar"; then
+                        echo "--> Problem with sidecar! Inspect the logs to diagnose the issue. <--"
+                      fi
+                    else
+                      retry docker compose -f sidecar.compose.yaml pull -q
+                      retry docker compose -f sidecar.compose.yaml up -d
+                    fi
+                }
+              - sidecar_tls_certificate_secret_arn: !If
+                  - sidecarTLSCertificateSecretArnEmpty
+                  - !Ref SidecarCreatedCertificateSecret
+                  - !Ref SidecarTLSCertificateSecretArn
+                sidecar_ca_certificate_secret_arn: !If
+                  - sidecarCACertificateSecretArnEmpty
+                  - !Ref SidecarCACertificateSecret
+                  - !Ref SidecarCACertificateSecretArn
+                curl:
+                  Fn::If:
+                    - shouldSkipTls
+                    - "curl -k"
+                    - "curl"
+                secrets_location: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
+            pre:
+              !Sub
+              - |
+                mkdir -p /home/ec2-user/cyral/
+                
+                package_install
+                get_secret
+                fetch_hostname
+                
+                # Get the latest sidecar version from the Control Plane if necessary.
+                IS_DYNAMIC_VERSION="false"
+                SIDECAR_VERSION=${SidecarVersion}
+                if [ -z $SIDECAR_VERSION ]; then
+                  echo "Sidecar version is unset - version will be dynamically managed."
+                  IS_DYNAMIC_VERSION="true"
+                  get_sidecar_version
+                  if [ $? -ne 0 ]; then
+                    echo "Error getting sidecar version from Control Plane. Dynamic version support is only enabled for Control Planes >= v4.10"
+                    exit 1
+                  fi
+                  if [ -z $SIDECAR_VERSION ]; then
+                    echo "Sidecar version is undefined."
+                    exit 1
+                  fi
+              
+                  # Create custom health check scripts
+                  cat << EOF > /home/ec2-user/cyral/healthcheck.sh
+                #!/usr/bin/env bash
+                health=\$(${curl} -sf -X GET "http://localhost:9000/health")
+                if [ \$? -ne 0 ]; then
+                  echo "Error getting sidecar health"
+                  exit 1
+                fi
+                recycle_status=\$(echo \$health | jq -r .components.recycle.status)
+                if [ \$recycle_status == "degraded" ]; then
+                  echo "Sidecar instance has been marked for recycling - setting EC2 health to 'Unhealthy'"
+                  aws autoscaling set-instance-health --region ${AWS::Region} --instance-id \$INSTANCE_ID --no-should-respect-grace-period --health-status Unhealthy
+                fi
+                EOF
+                
+                  cat << EOF > /etc/systemd/system/healthcheck.service
+                [Unit]
+                Description=Sidecar recycle EC2 health check
+                [Service]
+                Environment="INSTANCE_ID=$INSTANCE_ID"
+                ExecStart=/home/ec2-user/cyral/healthcheck.sh
+                EOF
+                
+                  cat << EOF > /etc/systemd/system/healthcheck.timer
+                [Unit]
+                Description=Sidecar recycle EC2 health check every 30 sec
+                [Timer]
+                OnBootSec=30
+                OnUnitActiveSec=${RecycleHealthCheckIntervalSec}
+                AccuracySec=1
+                [Install]
+                WantedBy=timers.target
+                EOF
+              
+                  # Start health check timer
+                  chmod +x /home/ec2-user/cyral/healthcheck.sh
+                  sudo systemctl enable healthcheck.timer
+                  sudo systemctl daemon-reload
+                  sudo systemctl start healthcheck.timer
+                fi
+
+                echo "Sidecar version: $SIDECAR_VERSION"
+                
+                docker_setup
+                if [[ ${UseSingleContainer} == "true" ]]; then
+                  echo "Skipping Docker Compose Install, not required for single container"
+                else
+                  docker_compose_install
+                fi
+                update_nginx_resolver
+                load_certs
+                load_idp_certs
+                registry_login
+                if [[ ${UseSingleContainer} == "true" ]]; then
+                  echo "Skipping Download Sidecar Compose File, not required for single container"
+                else
+                  retry download_sidecar
+                fi
+
+                # Initializing environment variables
+                env_var=$(cat <<EOF
+                SIDECAR_VERSION=$SIDECAR_VERSION
+                IS_DYNAMIC_VERSION=$IS_DYNAMIC_VERSION
+                IS_RECYCLABLE=true
+                CONTROLPLANE_HOST=${ControlPlane}
+                CONTAINER_REGISTRY=${ContainerRegistry}
+                METRICS_PORT=9000
+                SIDECAR_ENDPOINT=${sidecar_endpoint}
+                CLOUD_PROVIDER=AWS
+                AWS_REGION=${AWS::Region}
+                AWS_ACCOUNT_ID=${AWS::AccountId}
+                INSTANCE_ID=$INSTANCE_ID
+                LOG_GROUP_NAME=${log_group}
+                LOCATION_BASED_POLICY_EVAL=${EnableLocationBasedPolicyEval}
+                SSO_LOGIN_URL=${IdPSSOLoginURL}
+                IDP_CERTIFICATE=${IdPCertificate}
+                SIDECAR_IDP_PUBLIC_CERT=${SidecarPublicIdPCertificate}
+                SIDECAR_IDP_PRIVATE_KEY=${SidecarPrivateIdPKey}
+                NGINX_RESOLVER=$NGINX_RESOLVER
+                SECRETS_LOCATION=${secrets_location}
+                TLS_SKIP_VERIFY=${tls_skip_verify}
+
+                CYRAL_SIDECAR_ID=${SidecarId}
+                CYRAL_SIDECAR_CLIENT_ID=${!SIDECAR_CLIENT_ID}
+                CYRAL_SIDECAR_CLIENT_SECRET=${!SIDECAR_CLIENT_SECRET}
+                CYRAL_CONTROL_PLANE=${ControlPlane}
+                CYRAL_SIDECAR_ENDPOINT=${sidecar_endpoint}
+                CYRAL_SIDECAR_VERSION=$SIDECAR_VERSION
+
+                CYRAL_DEPLOYMENT_PROPERTIES='{
+                  "account-id": "${AWS::AccountId}",
+                  "region": "${AWS::Region}"
+                }'
+                CYRAL_CERTIFICATE_MANAGER_TLS_KEY=${!SIDECAR_TLS_KEY}
+                CYRAL_CERTIFICATE_MANAGER_TLS_CERT=${!SIDECAR_TLS_CERT}
+                CYRAL_CERTIFICATE_MANAGER_CA_KEY=${!SIDECAR_CA_KEY}
+                CYRAL_CERTIFICATE_MANAGER_CA_CERT=${!SIDECAR_CA_CERT}
+
+                LOAD_BALANCER_TLS_PORTS=${LoadBalancerTLSPorts}
+                EOF
+                )
+                cat > /home/ec2-user/.env << EOF
+                $env_var
+                $proxy_env
+                EOF
+              - sidecar_endpoint: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+                log_group: !Ref CloudwatchLogGroup
+                tls_skip_verify:
+                  Fn::If:
+                    - shouldSkipTls
+                    - "tls-skip-verify"
+                    - "tls"
+                secrets_location: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
+                curl:
+                  Fn::If:
+                    - shouldSkipTls
+                    - "curl -k"
+                    - "curl"
+            post: |
+              launch
+
+  SidecarSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enables SSH Access to Sidecar Hosts
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!GetAtt GetNamePrefixCustomResource.NamePrefix, "sidecar"]]
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+      SecurityGroupIngress: !GetAtt GetSecurityGroupsIngressListCustom.IngressList
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  GetSecurityGroupsIngressListCustom:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:       !GetAtt GetSecurityGroupsIngressListLambda.Arn
+      SidecarPorts:       !Ref SidecarPorts
+      DbCidrIp:           !Ref DBInboundCIDR
+      MonitoringCidrIp:   !Ref MonitoringInboundCIDR
+      SshCidrIp:          !Ref SSHInboundCIDR
+
+  GetSecurityGroupsIngressListLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Creates a list of rules for the sidecar security group ingress"
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 30
+      Role: !GetAtt LambdaIngressListRole.Arn
+      Code:
+        ZipFile: |
+          import cfnresponse
+          import logging
+          import json
+          def handler(event, context):
+            try:
+              if event['RequestType'] == 'Delete':
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              logger.info('Received event: {}'.format(json.dumps(event)))
+              sidecarPorts = event['ResourceProperties']['SidecarPorts'].split(',')
+              dbCidrIp = event['ResourceProperties']['DbCidrIp']
+              monitoringCidrIp = event['ResourceProperties']['MonitoringCidrIp']
+              sshCidrIp = event['ResourceProperties']['SshCidrIp']
+              response_data = {
+                'IngressList': [
+                  {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 9000,
+                    'ToPort': 9000,
+                    'CidrIp': monitoringCidrIp
+                  },
+                  {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'CidrIp': sshCidrIp
+                  },
+                  {
+                    'IpProtocol': 'icmp',
+                    'FromPort': -1,
+                    'ToPort': -1,
+                    'CidrIp': sshCidrIp
+                  }
+                ]
+              }
+              for port in sidecarPorts:
+                response_data['IngressList'].append({
+                  'IpProtocol': 'tcp',
+                  'FromPort': int(port),
+                  'ToPort': int(port),
+                  'CidrIp': dbCidrIp
+                })
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+            
+            except Exception as e:
+              print(f'error: {e}')
+              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  LambdaIngressListRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              [
+                !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*',
+              ]
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !GetAtt GetNamePrefixCustomResource.NamePrefix
+      Type: network
+      Scheme: !Ref LoadBalancerScheme
+      Subnets: !If [loadBalancerSubnetsEmpty, !Ref Subnets, !Ref LoadBalancerSubnets]
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: !Ref EnableCrossZoneLoadBalancing
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  CreateCyralMacrosCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:               !GetAtt CreateCyralMacrosLambda.Arn
+      LoadBalancerArn:            !Ref LoadBalancer
+      LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
+      NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
+      SidecarPorts:               !Ref SidecarPorts
+      LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
+      LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
+      VPC:                        !Ref VpcId
+      Retries:                    0
+      PermissionsBoundary:        !Ref PermissionsBoundary
+      MacrosTemplateVersion:      !FindInMap [Constants, MacrosTemplate, Version]
+      MacrosTemplateURL:
+        Fn::Sub:
+          - https://cyral-public-assets-us-east-1.s3.amazonaws.com/cloudformation/macros/${macros_template_version}/cft_sidecar_macros.yaml
+          - macros_template_version: !FindInMap [Constants, MacrosTemplate, Version]
+
+  CreateCyralMacrosLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Creates the Sidecar lambdas stack, if not already created"
+      Handler: index.handler
+      Runtime: "python3.9"
+      Timeout: 120
+      Role: !GetAtt CreateCyralMacrosLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import cfnresponse
+          import logging
+          import json
+          import boto3
+          import copy
+
+          def handler(event, context):
+            retries = 10
+            try:
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              logger.info('Received event: {}'.format(json.dumps(event)))
+
+              if event['RequestType'] == 'Delete':
+                logger.info("Received delete request. Skipping.")
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                return
+
+              retries     = int(event['ResourceProperties']['Retries'])
+              templateVersion = event['ResourceProperties']['MacrosTemplateVersion']
+              templateVersionDash = templateVersion.replace('.', '-')
+              templateUrl = event['ResourceProperties']['MacrosTemplateURL']
+              permissionsBoundary = event['ResourceProperties']['PermissionsBoundary']
+
+              logger.info("Checking if Cyral Macros stack should be created")
+              stack_name = 'CyralMacros-' + templateVersionDash
+              cf = boto3.client('cloudformation')
+              pag = cf.get_paginator("describe_stacks")
+              for resp in pag.paginate():
+                stacks = resp['Stacks']
+                existing_stack_names = [stack['StackName'] for stack in stacks]
+                if stack_name in existing_stack_names:
+                  logger.info(f"Stack {stack_name} already exists. Skipping")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              logger.info("Cyral Macros stack does not exist. Creating it")
+              response = cf.create_stack(
+                StackName=stack_name,
+                TemplateURL=templateUrl,
+                Parameters=[
+                  {
+                    "ParameterKey": "MacrosTemplateVersionDash",
+                    "ParameterValue": templateVersionDash
+                  },
+                  {
+                    "ParameterKey": "PermissionsBoundary",
+                    "ParameterValue": permissionsBoundary
+                  }
+                ],
+                Tags=[
+                  {
+                    "Key": "CyralMacros",
+                    "Value": "true"
+                  }
+                ],
+                Capabilities=['CAPABILITY_IAM']
+              )
+              stack_arn = response['StackId']
+              logger.info(f"Requested creation of stack {stack_name}")
+              logger.info(f"Response from create_stack: {json.dumps(response)}")
+
+              waiter = cf.get_waiter('stack_create_complete')
+              logger.info('Waiting for stack creation to complete...')
+              waiter.wait(StackName=stack_arn)
+              logger.info('Stack creation complete!')
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              return
+
+            except Exception as e:
+              try:
+                if retries >= 10:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                  logger.critical(f'Number of retries exhausted. Error: {e}')
+                  return
+
+                lambda_client = boto3.client('lambda')
+                payload = copy.deepcopy(event)
+                payload['ResourceProperties']['Retries'] = retries+1
+                response = lambda_client.invoke(
+                  FunctionName=context.function_name,
+                  InvocationType='Event',
+                  Payload=json.dumps(payload)
+                )
+                return
+
+              except Exception as e:
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                logger.critical(f"Failed to retry function execution: {e}",
+                  exc_info=True)
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  CreateCyralMacrosLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          # Permissions to create CyralMacros stack, if necessary.
+          - Effect: Allow
+            Action: ['cloudformation:ListStacks', 'cloudformation:DescribeStacks', 'cloudformation:CreateStack']
+            Resource: "*"
+          # Permissions to fetch CyralMacros stack from S3, if necessary.
+          - Effect: Allow
+            Action: ['s3:GetObject', 's3:GetObjectVersion']
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::public-cyral-assets/*'
+          # Permissions to create the CyralMacros functions, if necessary.
+          - Effect: Allow
+            Action: ['lambda:CreateFunction', 'lambda:DeleteFunction', 'lambda:GetFunction', 'lambda:TagResource']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:CyralMacros-*'
+          # Permissions to invoke the CyralMacros function specific to this
+          # stack, in case of retries.
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:*CreateCyralMacrosLambda*'
+          - Effect: Allow
+            Action: ['iam:CreateRole', 'iam:PutRolePolicy', 'iam:Get*', 'iam:Delete*', 'iam:PassRole']
+            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/CyralMacros*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              [
+                !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*',
+              ]
+
+  ResourcesStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL:
+        Fn::Sub:
+          - https://cyral-public-assets-us-east-1.s3.amazonaws.com/cloudformation/sidecar_resources/${resources_template_version}/cft_sidecar_resources.yaml
+          - resources_template_version: !FindInMap [Constants, ResourcesTemplate, Version]
+      Parameters:
+        LoadBalancerArn:            !Ref LoadBalancer
+        LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
+        NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
+        SidecarPorts:               !Ref SidecarPorts
+        LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
+        LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
+        VPC:                        !Ref VpcId
+        # This is here to make sure that the Cyral Macros stack is created
+        # before this resource.
+        CreateMacrosIsDone:         !Ref CreateCyralMacrosCustomResource
+        PermissionsBoundary:        !Ref PermissionsBoundary
+        CustomTag:                  !Ref CustomTag
+
+  SMSidecarSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: mustDeploySecrets
+    Properties:
+      Description: Cyral Sidecar secret with client id, secret and container registry key.
+      Name: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
+      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}"}'
+      KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  SidecarCName:
+    Type: AWS::Route53::RecordSet
+    Condition: mustCreateDNSRecordSet
+    Properties:
+      HostedZoneId: !Ref SidecarDNSHostedZoneId
+      Name: !Ref SidecarDNSName
+      Comment: DNS for Cyral Sidecar
+      ResourceRecords:
+      - !GetAtt LoadBalancer.DNSName
+      TTL: 300
+      Type: 'CNAME'
+
+  SidecarCreatedCertificateSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/cyral/sidecars/${SidecarId}/self-signed-certificate'
+      Description: Self-signed TLS certificate used by sidecar in case a custom certificate is not provided.
+      KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  SidecarCACertificateSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/cyral/sidecars/${SidecarId}/ca-certificate'
+      Description: CA certificate used by sidecar in case a custom CA certificate is not provided.
+      KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  SelfSignedCertificateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+         Fn::If:
+           - usePermissionsBoundary
+           - !Ref PermissionsBoundary
+           - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: CertificateManagerLambdaPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:UpdateSecret
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/cyral/sidecars/${SidecarId}/self-signed-certificate*'
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/cyral/sidecars/${SidecarId}/ca-certificate*'
+
+  SelfSignedCertificateLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Generates certificates for the sidecar when needed
+      Handler: index.handler
+      Runtime: python3.10
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:155826672581:layer:pyopenssl:1
+      Timeout: 120
+      Role: !GetAtt SelfSignedCertificateRole.Arn
+      Code:
+        ZipFile: |
+          import logging
+          import json
+          import secrets
+
+          import boto3
+          import cfnresponse
+          from OpenSSL import crypto
+
+          KEY_SIZE = 4096
+          CERT_DURATION = 10*365*24*60*60
+          CERT_COUNTRY = "US"
+          CERT_PROVINCE = "CA"
+          CERT_LOCALITY = "Redwood City"
+          CERT_ORGANIZATION = "Cyral Inc."
+          CERT_DEFAULT_HOST = "sidecar.app.cyral.com"
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          secrets_client = boto3.client('secretsmanager')
+
+          def handler(event, context):
+            response_data = {}
+            try:
+              logger.info('Received event: {}'.format(json.dumps(event)))
+
+              secret_id = event['ResourceProperties'].get('SecretId')
+              if not secret_id:
+                logger.error('SecretId is empty')
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                return
+
+              hostname = event['ResourceProperties'].get('Hostname')
+              is_ca_certificate = event['ResourceProperties'].get('IsCACertificate')
+              if event['RequestType'] == 'Create':
+                update_secret_if_needed(secret_id, is_ca_certificate, hostname)
+              elif event['RequestType'] == 'Update':
+                update_secret_if_needed(secret_id, is_ca_certificate, hostname)
+              elif event['RequestType'] == 'Delete':
+                pass
+              else:
+                pass
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              return
+            except Exception as e:
+              logger.error('Error: {}'.format(e))
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+              return
+
+          def update_secret_if_needed(secret_id, is_ca_certificate=False, hostname=CERT_DEFAULT_HOST):
+            current_value = None
+            try:
+              current_value = secrets_client.get_secret_value(
+                SecretId=secret_id
+              ).get('SecretString')
+            except secrets_client.exceptions.ResourceNotFoundException as err:
+              logger.info('Secret is empty, so a new certificate will be generated')
+            if current_value:
+              # do not update the secret if it already has a value
+              return
+            key_pem, cert_pem = generate_self_signed_cert(
+              is_ca_certificate=is_ca_certificate
+            )
+            secret_string = json.dumps({
+              'key':key_pem,
+              'cert':cert_pem,
+            })
+            secrets_client.update_secret(
+              SecretId=secret_id,
+              SecretString=secret_string
+            )
+
+          def generate_self_signed_cert(
+            is_ca_certificate=False,
+            hostname=CERT_DEFAULT_HOST
+          ):
+            key = crypto.PKey()
+            key.generate_key(crypto.TYPE_RSA, KEY_SIZE)
+            private_key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, key).decode('utf-8')
+
+            ca_cert = crypto.X509()
+            ca_cert.set_version(2)
+            ca_cert.set_serial_number(secrets.randbits(128))
+            ca_subj = ca_cert.get_subject()
+            ca_subj.C = CERT_COUNTRY
+            ca_subj.ST = CERT_PROVINCE
+            ca_subj.L = CERT_LOCALITY
+            ca_subj.O = CERT_ORGANIZATION
+            ca_cert.add_extensions([
+                crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=ca_cert),
+            ])
+            ca_cert.add_extensions([
+                crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid:always", issuer=ca_cert),
+            ])
+            ca_cert.add_extensions([
+                crypto.X509Extension(b"basicConstraints", False, b"CA:TRUE"),
+                crypto.X509Extension(b"keyUsage", False, b"keyCertSign, cRLSign"),
+            ])
+            ca_cert.set_issuer(ca_subj)
+            ca_cert.set_pubkey(key)
+            ca_cert.sign(key, 'sha256')
+            ca_cert.gmtime_adj_notBefore(0)
+            ca_cert.gmtime_adj_notAfter(CERT_DURATION)
+            ca_certificate_pem = crypto.dump_certificate(crypto.FILETYPE_PEM, ca_cert).decode('utf-8')
+            if is_ca_certificate:
+              return (private_key_pem, ca_certificate_pem)
+
+            # Create Self-Signed Certificate
+            client_cert = crypto.X509()
+            client_cert.set_version(2)
+            client_cert.set_serial_number(secrets.randbits(128))
+            client_subj = client_cert.get_subject()
+            client_subj.C = CERT_COUNTRY
+            client_subj.ST = CERT_PROVINCE
+            client_subj.L = CERT_LOCALITY
+            client_subj.O = CERT_ORGANIZATION
+            client_subj.CN = hostname
+            client_cert.add_extensions([
+                crypto.X509Extension(b"basicConstraints", False, b"CA:FALSE"),
+                crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=client_cert),
+            ])
+            client_cert.add_extensions([
+                crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid:always", issuer=ca_cert),
+                crypto.X509Extension(b"extendedKeyUsage", False, b"serverAuth"),
+                crypto.X509Extension(b"keyUsage", False, b"digitalSignature"),
+            ])
+            client_cert.add_extensions([
+                crypto.X509Extension(b'subjectAltName', False,
+                    ','.join([
+                        f'DNS:*.{hostname}'
+            ]).encode())])
+            client_cert.set_issuer(ca_subj)
+            client_cert.set_pubkey(key)
+            client_cert.gmtime_adj_notBefore(0)
+            client_cert.gmtime_adj_notAfter(CERT_DURATION)
+            client_cert.sign(key, 'sha256')
+            certifictate_pem = crypto.dump_certificate(crypto.FILETYPE_PEM, client_cert).decode('utf-8')
+
+            return (private_key_pem, certifictate_pem)
+      Tags:
+        - Key: "Stack"
+          Value: !Ref "AWS::StackName"
+        - Fn::If:
+          - useCustomTag
+          - Key: !Select [0, !Split ["=", !Ref CustomTag]]
+            Value: !Select [1, !Split ["=", !Ref CustomTag]]
+          - !Ref AWS::NoValue
+
+  SelfSignedCertificate:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
+      SecretId: !Ref SidecarCreatedCertificateSecret
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+
+  SidecarCACertificate:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
+      SecretId: !Ref SidecarCACertificateSecret
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+      IsCACertificate: true
+
+Outputs:
+  SidecarDNS:
+    Description: Sidecar DNS name
+    Value: !If [mustCreateDNSRecordSet, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+
+  SidecarLoadBalancerDNS:
+    Description: Sidecar load balancer DNS name
+    Value: !GetAtt LoadBalancer.DNSName
+  
+  SidecarSecurityGroupID:
+    Description: Sidecar security group id
+    Value: !Ref SidecarSecurityGroup
