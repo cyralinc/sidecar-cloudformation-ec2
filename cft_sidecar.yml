@@ -62,7 +62,6 @@ Metadata:
       - SidecarInstanceType
       - EnableLocationBasedPolicyEval
       - AmiId
-      - InternetProxy
       - HealthCheckGracePeriod
       - CustomUserDataPre
       - CustomUserDataPreSidecarStart
