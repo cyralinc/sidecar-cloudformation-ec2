@@ -2,7 +2,7 @@
 
 > **NOTE:** This repository will not be maintained after the `v4.10` release of the Cyral sidecar.
 >
-> Cyral suggests migrating to one of our other supported deployment methods ([Terraform](https://cyral.com/docs/sidecars/terraform/install) or [Helm](https://cyral.com/docs/sidecars/helm3/install)) as Cloudformation support could be limited in the future.
+> Cyral suggests migrating to one of our other supported [deployment methods](https://cyral.com/docs/sidecars/deployment) as Cloudformation support could be limited in the future.
 
 ## Summary
 
