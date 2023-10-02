@@ -9,7 +9,7 @@ Metadata:
       Parameters:
       - SidecarId
       - ControlPlane
-      - ClientID
+      - ClientId
       - ClientSecret
     - Label:
         default: 'Networking and Security Configuration'
@@ -39,7 +39,7 @@ Metadata:
       - SidecarCACertificateSecretArn
       - SidecarCACertificateRoleArn
       - SidecarCustomHostRole
-      - UserPolicies
+      - IAMPolicies
       - PermissionsBoundary
     - Label:
         default: 'SIEM Configuration'
@@ -62,6 +62,7 @@ Metadata:
       - SidecarInstanceType
       - EnableLocationBasedPolicyEval
       - AmiId
+      - InternetProxy
       - HealthCheckGracePeriod
       - CustomUserDataPre
       - CustomUserDataPreSidecarStart
@@ -81,7 +82,7 @@ Parameters:
   SidecarPorts:
     Description:
       "List of ports allowed to connect to the sidecar through the load balancer and security group.
-      The maximum number of ports is limited to Network Load Balancers quotas (listeners and target
+      The maximum number of ports is limited to Network Load Balancers quotas (listeners and target 
       groups). See also 'LoadBalancerTLSPorts'. Avoid port `9000` as it is reserved for instance
       monitoring."
     Type: String
@@ -135,14 +136,14 @@ Parameters:
     Default: ""
 
   DeploySecrets:
-    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `ClientID`, `ClientSecret` and `ContainerRegistryKey`"
+    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `ClientId`, `ClientSecret` and `ContainerRegistryKey`"
     Type: String
     AllowedValues: [true, false]
     Default: true
     ConstraintDescription: must specify 'true' or 'false'.
 
   SecretsLocation:
-    Description: "(Optional) Location in AWS Secrets Manager to store `ClientID`, `ClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
+    Description: "(Optional) Location in AWS Secrets Manager to store `ClientId`, `ClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
     Type: String
     Default: ""
 
@@ -156,7 +157,7 @@ Parameters:
     Type: String
     Default: ""
 
-  ClientID:
+  ClientId:
     NoEcho: true
     Description: "Sidecar client ID"
     Type: String
@@ -310,7 +311,7 @@ Parameters:
     Description: Cloudwatch log group name. In order to use this log group, set the logging integration in the control plane.
     Default: ""
 
-  UserPolicies:
+  IAMPolicies:
     Type: CommaDelimitedList
     Description: (Optional) List of IAM policies ARNs that will be attached to the sidecar IAM role (Comma Delimited List)
     Default: ""
@@ -461,7 +462,7 @@ Conditions:
 
   sidecarCustomHostRoleEmpty: !Equals [!Ref SidecarCustomHostRole, '']
   loadBalancerSubnetsEmpty: !Equals [!Join [",", !Ref LoadBalancerSubnets] , '']
-  mustAttachUserPolicies: !Not [!Equals [!Join ["", !Ref UserPolicies], ""]]
+  mustAttachIAMPolicies: !Not [!Equals [!Join ["", !Ref IAMPolicies], ""]]
   useKMSSecrets: !Not [!Equals [!Ref SecretsKMSArn, '']]
   useKMSEBS: !Not [!Equals [!Ref EC2EBSKMSArn, '']]
   useKMSSecretsOrEBS: !Or [!Condition useKMSSecrets, !Condition useKMSEBS]
@@ -619,7 +620,7 @@ Resources:
                 - ec2.amazonaws.com
             Action:
               - "sts:AssumeRole"
-      ManagedPolicyArns: !If [mustAttachUserPolicies, !Ref UserPolicies, !Ref AWS::NoValue]
+      ManagedPolicyArns: !If [mustAttachIAMPolicies, !Ref IAMPolicies, !Ref AWS::NoValue]
 
   SidecarHostPolicy:
     Type: "AWS::IAM::Policy"
@@ -730,7 +731,7 @@ Resources:
           Fn::Base64: !Sub
           - |
             #!/bin/bash -e
-
+            
             ${functions}
             ${CustomUserDataPre}
             ${pre}
@@ -741,7 +742,7 @@ Resources:
             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroupSidecar --region ${AWS::Region}
           - functions:
               !Sub
-              - |
+              - |            
                 # Defining functions
                 function package_install(){
                     echo "Updating and installing packages..."
@@ -758,7 +759,7 @@ Resources:
 
                 function docker_setup(){
                     echo "Configuring Docker..."
-                    sudo usermod -a -G docker ec2-user
+                    sudo usermod -a -G docker ec2-user    
                     # Configure fd limit for ec2 instance and containers
                     sudo bash -c 'cat > /etc/security/limits.d/fdlimit.conf' << EOF
                 *       soft  nofile  65535
@@ -876,7 +877,7 @@ Resources:
                     token=$(${curl} --no-progress-meter --fail-with-body --request POST "$url_token" -d grant_type=client_credentials -d client_id="$SIDECAR_CLIENT_ID" -d client_secret="$SIDECAR_CLIENT_SECRET" 2>&1)
                     token_error=$(echo $?)
                 }
-
+                
                 function get_sidecar_version () {
                     echo "Getting sidecar version from Control Plane..."
                     get_token "443"
@@ -886,7 +887,7 @@ Resources:
                         if [[ $token_error -ne 0 ]]; then
                             echo "Unable to retrieve token!!"
                             echo "Attempt on 443: $error_443"
-                            echo "Attempt on 8000: $token"
+                            echo "Attempt on 8000: $token"        
                             return 1
                         fi
                     fi
@@ -909,7 +910,7 @@ Resources:
                         if [[ $token_error -ne 0 ]]; then
                             echo "Unable to retrieve token!!"
                             echo "Attempt on 443: $error_443"
-                            echo "Attempt on 8000: $token"
+                            echo "Attempt on 8000: $token"        
                             return 1
                         fi
                     fi
@@ -984,11 +985,11 @@ Resources:
               !Sub
               - |
                 mkdir -p /home/ec2-user/cyral/
-
+                
                 package_install
                 get_secret
                 fetch_hostname
-
+                
                 # Get the latest sidecar version from the Control Plane if necessary.
                 IS_DYNAMIC_VERSION="false"
                 SIDECAR_VERSION=${SidecarVersion}
@@ -1004,7 +1005,7 @@ Resources:
                     echo "Sidecar version is undefined."
                     exit 1
                   fi
-
+              
                   # Create custom health check scripts
                   cat << EOF > /home/ec2-user/cyral/healthcheck.sh
                 #!/usr/bin/env bash
@@ -1019,7 +1020,7 @@ Resources:
                   aws autoscaling set-instance-health --region ${AWS::Region} --instance-id \$INSTANCE_ID --no-should-respect-grace-period --health-status Unhealthy
                 fi
                 EOF
-
+                
                   cat << EOF > /etc/systemd/system/healthcheck.service
                 [Unit]
                 Description=Sidecar recycle EC2 health check
@@ -1027,7 +1028,7 @@ Resources:
                 Environment="INSTANCE_ID=$INSTANCE_ID"
                 ExecStart=/home/ec2-user/cyral/healthcheck.sh
                 EOF
-
+                
                   cat << EOF > /etc/systemd/system/healthcheck.timer
                 [Unit]
                 Description=Sidecar recycle EC2 health check every 30 sec
@@ -1038,7 +1039,7 @@ Resources:
                 [Install]
                 WantedBy=timers.target
                 EOF
-
+              
                   # Start health check timer
                   chmod +x /home/ec2-user/cyral/healthcheck.sh
                   sudo systemctl enable healthcheck.timer
@@ -1047,7 +1048,7 @@ Resources:
                 fi
 
                 echo "Sidecar version: $SIDECAR_VERSION"
-
+                
                 docker_setup
                 if [[ ${UseSingleContainer} == "true" ]]; then
                   echo "Skipping Docker Compose Install, not required for single container"
@@ -1209,7 +1210,7 @@ Resources:
                   'CidrIp': dbCidrIp
                 })
               cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-
+            
             except Exception as e:
               print(f'error: {e}')
               cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
@@ -1483,7 +1484,7 @@ Resources:
     Properties:
       Description: Cyral Sidecar secret with client id, secret and container registry key.
       Name: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
-      SecretString: !Sub '{"clientId":"${ClientID}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}"}'
+      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}"}'
       KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
       Tags:
         - Key: "Stack"
@@ -1755,7 +1756,7 @@ Outputs:
   SidecarLoadBalancerDNS:
     Description: Sidecar load balancer DNS name
     Value: !GetAtt LoadBalancer.DNSName
-
+  
   SidecarSecurityGroupID:
     Description: Sidecar security group id
     Value: !Ref SidecarSecurityGroup
