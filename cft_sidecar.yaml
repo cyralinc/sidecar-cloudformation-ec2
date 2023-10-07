@@ -14,7 +14,7 @@ Metadata:
     - Label:
         default: 'Networking and Security Configuration'
       Parameters:
-      - VpcId
+      - VPC
       - Subnets
       - SidecarPorts
       - AssociatePublicIpAddress
@@ -105,7 +105,7 @@ Parameters:
     Default: ""
     AllowedPattern: ^((\d+\,)*(\d+))*$
 
-  VpcId:
+  VPC:
     Description: "AWS VPC ID to deploy sidecar to"
     Type: AWS::EC2::VPC::Id
     AllowedPattern: ".+"
@@ -1130,7 +1130,7 @@ Resources:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
       GroupDescription: Enables SSH Access to Sidecar Hosts
-      VpcId: !Ref VpcId
+      VpcId: !Ref VPC
       Tags:
         - Key: "Name"
           Value: !Join ["-", [!GetAtt GetNamePrefixCustomResource.NamePrefix, "sidecar"]]
@@ -1284,7 +1284,7 @@ Resources:
       SidecarPorts:               !Ref SidecarPorts
       LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
       LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
-      VPC:                        !Ref VpcId
+      VPC:                        !Ref VPC
       Retries:                    0
       PermissionsBoundary:        !Ref PermissionsBoundary
       MacrosTemplateVersion:      !FindInMap [Constants, MacrosTemplate, Version]
@@ -1470,7 +1470,7 @@ Resources:
         SidecarPorts:               !Ref SidecarPorts
         LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
         LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
-        VPC:                        !Ref VpcId
+        VPC:                        !Ref VPC
         # This is here to make sure that the Cyral Macros stack is created
         # before this resource.
         CreateMacrosIsDone:         !Ref CreateCyralMacrosCustomResource
