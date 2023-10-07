@@ -1081,8 +1081,8 @@ Resources:
                 LOCATION_BASED_POLICY_EVAL=${EnableLocationBasedPolicyEval}
                 SSO_LOGIN_URL=${IdPSSOLoginURL}
                 IDP_CERTIFICATE=${IdPCertificate}
-                SIDECAR_IDP_PUBLIC_CERT=${SidecarPublicIdPCertificate}
-                SIDECAR_IDP_PRIVATE_KEY=${SidecarPrivateIdPKey}
+                SIDECAR_IDP_PUBLIC_CERT=${!SIDECAR_IDP_PUBLIC_CERT}
+                SIDECAR_IDP_PRIVATE_KEY=${!SIDECAR_IDP_PRIVATE_KEY}
                 NGINX_RESOLVER=$NGINX_RESOLVER
                 SECRETS_LOCATION=${secrets_location}
                 TLS_SKIP_VERIFY=${tls_skip_verify}
@@ -1110,7 +1110,7 @@ Resources:
                 $env_var
                 $proxy_env
                 EOF
-              - sidecar_endpoint: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+              - sidecar_endpoint: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
                 log_group: !Ref CloudwatchLogGroup
                 tls_skip_verify:
                   Fn::If:
@@ -1255,7 +1255,7 @@ Resources:
                 !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*',
               ]
 
-  LoadBalancer:
+  ECSNLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: !GetAtt GetNamePrefixCustomResource.NamePrefix
@@ -1278,7 +1278,7 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken:               !GetAtt CreateCyralMacrosLambda.Arn
-      LoadBalancerArn:            !Ref LoadBalancer
+      LoadBalancerArn:            !Ref ECSNLB
       LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
       NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
       SidecarPorts:               !Ref SidecarPorts
@@ -1464,7 +1464,7 @@ Resources:
           - https://cyral-public-assets-us-east-1.s3.amazonaws.com/cloudformation/sidecar_resources/${resources_template_version}/cft_sidecar_resources.yaml
           - resources_template_version: !FindInMap [Constants, ResourcesTemplate, Version]
       Parameters:
-        LoadBalancerArn:            !Ref LoadBalancer
+        LoadBalancerArn:            !Ref ECSNLB
         LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
         NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
         SidecarPorts:               !Ref SidecarPorts
@@ -1483,7 +1483,8 @@ Resources:
     Properties:
       Description: Cyral Sidecar secret with client id, secret and container registry key.
       Name: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
-      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}"}'
+
+      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}", "sidecarPublicIdpCertificate": "${SidecarPublicIdPCertificate}", "sidecarPrivateIdpKey": "${SidecarPrivateIdPKey}"}'
       KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
       Tags:
         - Key: "Stack"
@@ -1502,7 +1503,7 @@ Resources:
       Name: !Ref SidecarDNSName
       Comment: DNS for Cyral Sidecar
       ResourceRecords:
-      - !GetAtt LoadBalancer.DNSName
+      - !GetAtt ECSNLB.DNSName
       TTL: 300
       Type: 'CNAME'
 
@@ -1737,24 +1738,24 @@ Resources:
     Properties:
       ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
       SecretId: !Ref SidecarCreatedCertificateSecret
-      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
 
   SidecarCACertificate:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
       SecretId: !Ref SidecarCACertificateSecret
-      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
       IsCACertificate: true
 
 Outputs:
   SidecarDNS:
     Description: Sidecar DNS name
-    Value: !If [mustCreateDNSRecordSet, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+    Value: !If [mustCreateDNSRecordSet, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
 
   SidecarLoadBalancerDNS:
     Description: Sidecar load balancer DNS name
-    Value: !GetAtt LoadBalancer.DNSName
+    Value: !GetAtt ECSNLB.DNSName
   
   SidecarSecurityGroupID:
     Description: Sidecar security group id
