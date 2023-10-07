@@ -9,8 +9,8 @@ Metadata:
       Parameters:
       - SidecarId
       - ControlPlane
-      - ClientId
-      - ClientSecret
+      - SidecarClientID
+      - SidecarClientSecret
     - Label:
         default: 'Networking and Security Configuration'
       Parameters:
@@ -39,7 +39,7 @@ Metadata:
       - SidecarCACertificateSecretArn
       - SidecarCACertificateRoleArn
       - SidecarCustomHostRole
-      - IAMPolicies
+      - UserPolicies
       - PermissionsBoundary
     - Label:
         default: 'SIEM Configuration'
@@ -135,14 +135,14 @@ Parameters:
     Default: ""
 
   DeploySecrets:
-    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `ClientId`, `ClientSecret` and `ContainerRegistryKey`"
+    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `SidecarClientID`, `SidecarClientSecret` and `ContainerRegistryKey`"
     Type: String
     AllowedValues: [true, false]
     Default: true
     ConstraintDescription: must specify 'true' or 'false'.
 
   SecretsLocation:
-    Description: "(Optional) Location in AWS Secrets Manager to store `ClientId`, `ClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
+    Description: "(Optional) Location in AWS Secrets Manager to store `SidecarClientID`, `SidecarClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
     Type: String
     Default: ""
 
@@ -156,13 +156,13 @@ Parameters:
     Type: String
     Default: ""
 
-  ClientId:
+  SidecarClientID:
     NoEcho: true
     Description: "Sidecar client ID"
     Type: String
     AllowedPattern: ".+"
 
-  ClientSecret:
+  SidecarClientSecret:
     NoEcho: true
     Description: "Sidecar client secret"
     Type: String
@@ -310,7 +310,7 @@ Parameters:
     Description: Cloudwatch log group name. In order to use this log group, set the logging integration in the control plane.
     Default: ""
 
-  IAMPolicies:
+  UserPolicies:
     Type: CommaDelimitedList
     Description: (Optional) List of IAM policies ARNs that will be attached to the sidecar IAM role (Comma Delimited List)
     Default: ""
@@ -461,7 +461,7 @@ Conditions:
 
   sidecarCustomHostRoleEmpty: !Equals [!Ref SidecarCustomHostRole, '']
   loadBalancerSubnetsEmpty: !Equals [!Join [",", !Ref LoadBalancerSubnets] , '']
-  mustAttachIAMPolicies: !Not [!Equals [!Join ["", !Ref IAMPolicies], ""]]
+  mustAttachUserPolicies: !Not [!Equals [!Join ["", !Ref UserPolicies], ""]]
   useKMSSecrets: !Not [!Equals [!Ref SecretsKMSArn, '']]
   useKMSEBS: !Not [!Equals [!Ref EC2EBSKMSArn, '']]
   useKMSSecretsOrEBS: !Or [!Condition useKMSSecrets, !Condition useKMSEBS]
@@ -619,7 +619,7 @@ Resources:
                 - ec2.amazonaws.com
             Action:
               - "sts:AssumeRole"
-      ManagedPolicyArns: !If [mustAttachIAMPolicies, !Ref IAMPolicies, !Ref AWS::NoValue]
+      ManagedPolicyArns: !If [mustAttachUserPolicies, !Ref UserPolicies, !Ref AWS::NoValue]
 
   SidecarHostPolicy:
     Type: "AWS::IAM::Policy"
@@ -1484,7 +1484,7 @@ Resources:
       Description: Cyral Sidecar secret with client id, secret and container registry key.
       Name: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
 
-      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}", "sidecarPublicIdpCertificate": "${SidecarPublicIdPCertificate}", "sidecarPrivateIdpKey": "${SidecarPrivateIdPKey}"}'
+      SecretString: !Sub '{"clientId":"${SidecarClientID}", "clientSecret": "${SidecarClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}", "sidecarPublicIdpCertificate": "${SidecarPublicIdPCertificate}", "sidecarPrivateIdpKey": "${SidecarPrivateIdPKey}"}'
       KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
       Tags:
         - Key: "Stack"
