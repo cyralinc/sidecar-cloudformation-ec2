@@ -9,12 +9,12 @@ Metadata:
       Parameters:
       - SidecarId
       - ControlPlane
-      - ClientId
-      - ClientSecret
+      - SidecarClientID
+      - SidecarClientSecret
     - Label:
         default: 'Networking and Security Configuration'
       Parameters:
-      - VpcId
+      - VPC
       - Subnets
       - SidecarPorts
       - AssociatePublicIpAddress
@@ -39,7 +39,7 @@ Metadata:
       - SidecarCACertificateSecretArn
       - SidecarCACertificateRoleArn
       - SidecarCustomHostRole
-      - IAMPolicies
+      - UserPolicies
       - PermissionsBoundary
     - Label:
         default: 'SIEM Configuration'
@@ -105,7 +105,7 @@ Parameters:
     Default: ""
     AllowedPattern: ^((\d+\,)*(\d+))*$
 
-  VpcId:
+  VPC:
     Description: "AWS VPC ID to deploy sidecar to"
     Type: AWS::EC2::VPC::Id
     AllowedPattern: ".+"
@@ -135,14 +135,14 @@ Parameters:
     Default: ""
 
   DeploySecrets:
-    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `ClientId`, `ClientSecret` and `ContainerRegistryKey`"
+    Description: "Create the AWS Secrets Manager resource at `SecretsLocation` storing `SidecarClientID`, `SidecarClientSecret` and `ContainerRegistryKey`"
     Type: String
     AllowedValues: [true, false]
     Default: true
     ConstraintDescription: must specify 'true' or 'false'.
 
   SecretsLocation:
-    Description: "(Optional) Location in AWS Secrets Manager to store `ClientId`, `ClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
+    Description: "(Optional) Location in AWS Secrets Manager to store `SidecarClientID`, `SidecarClientSecret` and `ContainerRegistryKey`. If unset, will assume `/cyral/sidecars/<SIDECAR_ID>/secrets`."
     Type: String
     Default: ""
 
@@ -156,13 +156,13 @@ Parameters:
     Type: String
     Default: ""
 
-  ClientId:
+  SidecarClientID:
     NoEcho: true
     Description: "Sidecar client ID"
     Type: String
     AllowedPattern: ".+"
 
-  ClientSecret:
+  SidecarClientSecret:
     NoEcho: true
     Description: "Sidecar client secret"
     Type: String
@@ -310,7 +310,7 @@ Parameters:
     Description: Cloudwatch log group name. In order to use this log group, set the logging integration in the control plane.
     Default: ""
 
-  IAMPolicies:
+  UserPolicies:
     Type: CommaDelimitedList
     Description: (Optional) List of IAM policies ARNs that will be attached to the sidecar IAM role (Comma Delimited List)
     Default: ""
@@ -461,7 +461,7 @@ Conditions:
 
   sidecarCustomHostRoleEmpty: !Equals [!Ref SidecarCustomHostRole, '']
   loadBalancerSubnetsEmpty: !Equals [!Join [",", !Ref LoadBalancerSubnets] , '']
-  mustAttachIAMPolicies: !Not [!Equals [!Join ["", !Ref IAMPolicies], ""]]
+  mustAttachUserPolicies: !Not [!Equals [!Join ["", !Ref UserPolicies], ""]]
   useKMSSecrets: !Not [!Equals [!Ref SecretsKMSArn, '']]
   useKMSEBS: !Not [!Equals [!Ref EC2EBSKMSArn, '']]
   useKMSSecretsOrEBS: !Or [!Condition useKMSSecrets, !Condition useKMSEBS]
@@ -619,7 +619,7 @@ Resources:
                 - ec2.amazonaws.com
             Action:
               - "sts:AssumeRole"
-      ManagedPolicyArns: !If [mustAttachIAMPolicies, !Ref IAMPolicies, !Ref AWS::NoValue]
+      ManagedPolicyArns: !If [mustAttachUserPolicies, !Ref UserPolicies, !Ref AWS::NoValue]
 
   SidecarHostPolicy:
     Type: "AWS::IAM::Policy"
@@ -1080,9 +1080,9 @@ Resources:
                 LOG_GROUP_NAME=${log_group}
                 LOCATION_BASED_POLICY_EVAL=${EnableLocationBasedPolicyEval}
                 SSO_LOGIN_URL=${IdPSSOLoginURL}
-                IDP_CERTIFICATE=${IdPCertificate}
-                SIDECAR_IDP_PUBLIC_CERT=${SidecarPublicIdPCertificate}
-                SIDECAR_IDP_PRIVATE_KEY=${SidecarPrivateIdPKey}
+                IDP_CERTIFICATE="${IdPCertificate}"
+                SIDECAR_IDP_PUBLIC_CERT="${!SIDECAR_IDP_PUBLIC_CERT}"
+                SIDECAR_IDP_PRIVATE_KEY="${!SIDECAR_IDP_PRIVATE_KEY}"
                 NGINX_RESOLVER=$NGINX_RESOLVER
                 SECRETS_LOCATION=${secrets_location}
                 TLS_SKIP_VERIFY=${tls_skip_verify}
@@ -1130,7 +1130,7 @@ Resources:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
       GroupDescription: Enables SSH Access to Sidecar Hosts
-      VpcId: !Ref VpcId
+      VpcId: !Ref VPC
       Tags:
         - Key: "Name"
           Value: !Join ["-", [!GetAtt GetNamePrefixCustomResource.NamePrefix, "sidecar"]]
@@ -1284,7 +1284,7 @@ Resources:
       SidecarPorts:               !Ref SidecarPorts
       LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
       LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
-      VPC:                        !Ref VpcId
+      VPC:                        !Ref VPC
       Retries:                    0
       PermissionsBoundary:        !Ref PermissionsBoundary
       MacrosTemplateVersion:      !FindInMap [Constants, MacrosTemplate, Version]
@@ -1470,7 +1470,7 @@ Resources:
         SidecarPorts:               !Ref SidecarPorts
         LoadBalancerTLSPorts:       !Ref LoadBalancerTLSPorts
         LoadBalancerStickyPorts:    !Ref LoadBalancerStickyPorts
-        VPC:                        !Ref VpcId
+        VPC:                        !Ref VPC
         # This is here to make sure that the Cyral Macros stack is created
         # before this resource.
         CreateMacrosIsDone:         !Ref CreateCyralMacrosCustomResource
@@ -1483,7 +1483,8 @@ Resources:
     Properties:
       Description: Cyral Sidecar secret with client id, secret and container registry key.
       Name: !If [hasSecretsLocation, !Ref SecretsLocation, !Sub '/cyral/sidecars/${SidecarId}/secrets']
-      SecretString: !Sub '{"clientId":"${ClientId}", "clientSecret": "${ClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}"}'
+
+      SecretString: !Sub '{"clientId":"${SidecarClientID}", "clientSecret": "${SidecarClientSecret}", "containerRegistryKey": "${ContainerRegistryKey}", "sidecarPublicIdpCertificate": "${SidecarPublicIdPCertificate}", "sidecarPrivateIdpKey": "${SidecarPrivateIdPKey}"}'
       KmsKeyId: !If [useKMSSecrets, !Ref SecretsKMSArn, !Ref AWS::NoValue]
       Tags:
         - Key: "Stack"
