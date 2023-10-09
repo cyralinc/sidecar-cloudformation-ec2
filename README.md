@@ -1,17 +1,22 @@
 # Sidecar - CloudFormation AWS EC2
 
-> **NOTE:** This repository will not be maintained after the `v4.10` release of the Cyral sidecar.
+> **NOTE:** This repository will not be maintained after the end of life ot the Cyral sidecar release `v4`.
 >
-> Cyral suggests migrating to one of our other supported [deployment methods](https://cyral.com/docs/sidecars/deployment) as Cloudformation support could be limited in the future.
-> If you still plan to use CloudFormation in the long run, we recommend that you use our
-> [CloudFormation AWS EC2](https://github.com/cyral-quickstart/quickstart-sidecar-cloudformation-ec2) quick-start.
+> Cyral suggests migrating to one of our other supported [deployment methods](https://cyral.com/docs/sidecars/deployment) as CloudFormation support could be limited in the future.
 
-Customers that are running sidecar versions <= `v4.9` may use the [Cloudformation YAML](./cft_sidecar.yaml)
-file located in this repository to upgrade their sidecar to at least `v4.10`.
+Customers that are running sidecars versions <= `v4.9` may use the [Cloudformation YAML](./cft_sidecar.yaml)
+file located in this repository to upgrade them to `v4.10` or later.
+
+If you plan to use CloudFormation in the long run, we recommend that you
+use our [CloudFormation AWS EC2](https://github.com/cyral-quickstart/quickstart-sidecar-cloudformation-ec2) quick-start.
+
+---
 
 ## Architecture
 
 ![Deployment architecture](images/aws_architecture.png)
+
+---
 
 ## Deployment
 
@@ -43,13 +48,13 @@ The elements shown in the architecture diagram above are deployed by the [Cyral 
     * Create a new stack.
     * Upload the downloaded template.
     * Click `Next`.
-    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, `ClientId` and 
-    `ClientSecret` with the information from the `Cyral Templates` option
-    in the `Deployment` tab of your sidecar details.
-    * Fill the parameters `VPC` and `Subnets` with an existing VPC and
-    subnet that can connect to the database you plan to protect with this
-    sidecar.
-    * Set parameters `AssociatePublicIpAddress=true` and `LoadBalancerScheme='internal'`
+    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, 
+    `SidecarClientId` and `SidecarClientSecret` with the information from the `Cyral Templates`
+    option in the `Deployment` tab of your sidecar details.
+    * Fill the parameters `VPC` and `Subnets` with an existing VPC and subnets that allows 
+    network connectivity to the Cyral control plane (outbound HTTPS and gRPC traffic using port `443`)
+    and ti the database you plan to protect with this sidecar.
+    * Set parameters `AssociatePublicIpAddress=true` and `LoadBalancerScheme='internet-facing'`
     to deploy a public sidecar.
     * Click `Next`, follow the remaining steps of the wizard acknowledging the capabilities requested and confirm the stack creation.
 
@@ -75,13 +80,13 @@ instances to the protected databases.
     * Create a new stack.
     * Upload the downloaded template.
     * Click `Next`.
-    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, `ClientId` and 
-    `ClientSecret` with the information from the `Cyral Templates` option
-    in the `Deployment` tab of your sidecar details.
-    * Fill the parameters `VPC` and `Subnets` with an existing VPC and
-    subnet that can connect to the database you plan to protect with this
-    sidecar.
-    * Set `AssociatePublicIpAddress=true`, `LoadBalancerScheme='internal'`, `AsgMin=1`, `AsgMax=4`, 
+    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, 
+    `SidecarClientId` and `SidecarClientSecret` with the information from the `Cyral Templates`
+    option in the `Deployment` tab of your sidecar details.
+    * Fill the parameters `VPC` and `Subnets` with an existing VPC and subnets that allows 
+    network connectivity to the Cyral control plane (outbound HTTPS and gRPC traffic using port `443`)
+    and to the database you plan to protect with this sidecar.
+    * Set `AssociatePublicIpAddress=false`, `LoadBalancerScheme='internal'`, `AsgMin=1`, `AsgMax=4`, 
     `AsgDesired=2`, and `EnableCrossZoneLoadBalancing=true`.
     * Click `Next`, follow the remaining steps of the wizard acknowledging the capabilities requested and confirm the stack creation.
 
@@ -106,17 +111,23 @@ allowed inbound rules in the databases' security groups. If the databases do not
 analyze what is the proper networking configuration to allow connectivity from the EC2
 instances to the protected databases.
 
+---
+
 ### Parameters
 
 See the full list of parameters in the parameters section of the [deployment template](./cft_sidecar.yaml).
 
-### 1-click upgrade
+---
+
+## Upgrade
 
 This quick start supports [1-click upgrade](https://cyral.com/docs/sidecars/manage/upgrade#1-click-upgrade).
 To enable the 1-click upgrade feature, leave the variable `SidecarVersion` empty. If you prefer
 to block this feature instead, assign the desired sidecar version to `SidecarVersion`.
 
-### Advanced
+---
+
+## Advanced
 
 Instructions for advanced deployment configurations are available for the following topics:
 
