@@ -48,13 +48,13 @@ The elements shown in the architecture diagram above are deployed by the [Cyral 
     * Create a new stack.
     * Upload the downloaded template.
     * Click `Next`.
-    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, `ClientId` and 
-    `ClientSecret` with the information from the `Cyral Templates` option
-    in the `Deployment` tab of your sidecar details.
-    * Fill the parameters `VPC` and `Subnets` with an existing VPC and
-    subnet that can connect to the database you plan to protect with this
-    sidecar.
-    * Set parameters `AssociatePublicIpAddress=true` and `LoadBalancerScheme='internal'`
+    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, 
+    `SidecarClientId` and `SidecarClientSecret` with the information from the `Cyral Templates`
+    option in the `Deployment` tab of your sidecar details.
+    * Fill the parameters `VPC` and `Subnets` with an existing VPC and subnets that allows 
+    network connectivity to the Cyral control plane (outbound HTTPS and gRPC traffic using port `443`)
+    and ti the database you plan to protect with this sidecar.
+    * Set parameters `AssociatePublicIpAddress=true` and `LoadBalancerScheme='internet-facing'`
     to deploy a public sidecar.
     * Click `Next`, follow the remaining steps of the wizard acknowledging the capabilities requested and confirm the stack creation.
 
@@ -80,13 +80,13 @@ instances to the protected databases.
     * Create a new stack.
     * Upload the downloaded template.
     * Click `Next`.
-    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, `ClientId` and 
-    `ClientSecret` with the information from the `Cyral Templates` option
-    in the `Deployment` tab of your sidecar details.
-    * Fill the parameters `VPC` and `Subnets` with an existing VPC and
-    subnet that can connect to the database you plan to protect with this
-    sidecar.
-    * Set `AssociatePublicIpAddress=true`, `LoadBalancerScheme='internal'`, `AsgMin=1`, `AsgMax=4`, 
+    * Enter a suitable `Stack name`, then fill the parameters `SidecarId`, `ControlPlane`, 
+    `SidecarClientId` and `SidecarClientSecret` with the information from the `Cyral Templates`
+    option in the `Deployment` tab of your sidecar details.
+    * Fill the parameters `VPC` and `Subnets` with an existing VPC and subnets that allows 
+    network connectivity to the Cyral control plane (outbound HTTPS and gRPC traffic using port `443`)
+    and to the database you plan to protect with this sidecar.
+    * Set `AssociatePublicIpAddress=false`, `LoadBalancerScheme='internal'`, `AsgMin=1`, `AsgMax=4`, 
     `AsgDesired=2`, and `EnableCrossZoneLoadBalancing=true`.
     * Click `Next`, follow the remaining steps of the wizard acknowledging the capabilities requested and confirm the stack creation.
 
