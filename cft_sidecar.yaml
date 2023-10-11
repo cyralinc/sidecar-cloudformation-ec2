@@ -1110,7 +1110,7 @@ Resources:
                 $env_var
                 $proxy_env
                 EOF
-              - sidecar_endpoint: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+              - sidecar_endpoint: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
                 log_group: !Ref CloudwatchLogGroup
                 tls_skip_verify:
                   Fn::If:
@@ -1255,10 +1255,10 @@ Resources:
                 !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*',
               ]
 
-  LoadBalancer:
+  ECSNLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !GetAtt GetNamePrefixCustomResource.NamePrefix
+      Name: !Join ['-', [!GetAtt GetNamePrefixCustomResource.NamePrefix, lb]]
       Type: network
       Scheme: !Ref LoadBalancerScheme
       Subnets: !If [loadBalancerSubnetsEmpty, !Ref Subnets, !Ref LoadBalancerSubnets]
@@ -1278,7 +1278,7 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken:               !GetAtt CreateCyralMacrosLambda.Arn
-      LoadBalancerArn:            !Ref LoadBalancer
+      LoadBalancerArn:            !Ref ECSNLB
       LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
       NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
       SidecarPorts:               !Ref SidecarPorts
@@ -1464,7 +1464,7 @@ Resources:
           - https://cyral-public-assets-us-east-1.s3.amazonaws.com/cloudformation/sidecar_resources/${resources_template_version}/cft_sidecar_resources.yaml
           - resources_template_version: !FindInMap [Constants, ResourcesTemplate, Version]
       Parameters:
-        LoadBalancerArn:            !Ref LoadBalancer
+        LoadBalancerArn:            !Ref ECSNLB
         LoadBalancerCertificateArn: !Ref LoadBalancerCertificateArn
         NamePrefix:                 !GetAtt GetNamePrefixCustomResource.NamePrefix
         SidecarPorts:               !Ref SidecarPorts
@@ -1503,7 +1503,7 @@ Resources:
       Name: !Ref SidecarDNSName
       Comment: DNS for Cyral Sidecar
       ResourceRecords:
-      - !GetAtt LoadBalancer.DNSName
+      - !GetAtt ECSNLB.DNSName
       TTL: 300
       Type: 'CNAME'
 
@@ -1738,24 +1738,24 @@ Resources:
     Properties:
       ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
       SecretId: !Ref SidecarCreatedCertificateSecret
-      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
 
   SidecarCACertificate:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt SelfSignedCertificateLambda.Arn
       SecretId: !Ref SidecarCACertificateSecret
-      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+      Hostname: !If [sidecarDNSNameNotEmpty, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
       IsCACertificate: true
 
 Outputs:
   SidecarDNS:
     Description: Sidecar DNS name
-    Value: !If [mustCreateDNSRecordSet, !Ref SidecarDNSName, !GetAtt LoadBalancer.DNSName]
+    Value: !If [mustCreateDNSRecordSet, !Ref SidecarDNSName, !GetAtt ECSNLB.DNSName]
 
   SidecarLoadBalancerDNS:
     Description: Sidecar load balancer DNS name
-    Value: !GetAtt LoadBalancer.DNSName
+    Value: !GetAtt ECSNLB.DNSName
   
   SidecarSecurityGroupID:
     Description: Sidecar security group id
